@@ -781,13 +781,13 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('direct_message', ({ targetUsername, senderUsername, senderName, text, time }) => {
+  socket.on('direct_message', ({ targetUsername, senderUsername, senderName, text, time, messageId }) => {
     if (typeof targetUsername !== 'string' || typeof text !== 'string' || !text.trim()) return;
     const key = targetUsername.trim().toLowerCase();
     const targetSocketId = onlineUsers[key];
     
     if (targetSocketId) {
-      io.to(targetSocketId).emit('direct_message', { senderUsername, senderName, text, time });
+      io.to(targetSocketId).emit('direct_message', { senderUsername, senderName, text, time, messageId });
       console.log(`[Presence] Direct message routed to ${targetUsername}`);
     } else {
       // Offline — send Web Push with the actual message preview

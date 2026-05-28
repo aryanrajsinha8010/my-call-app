@@ -602,7 +602,8 @@ export default function App() {
           senderUsername: userName,
           senderName: profile.username || userName,
           text: msgText,
-          time: msg.time
+          time: msg.time,
+          messageId: msg.id
         });
       }
       
@@ -929,6 +930,7 @@ export default function App() {
             const nextChats = { ...prev };
             const nextUnreadCounts = { ...unreadChatCounts };
             const newNotifications = [...inboxNotifications];
+            let hasActiveUnread = false;
             
             data.forEach((msg: any) => {
               const senderUser = msg.sender;
@@ -946,6 +948,8 @@ export default function App() {
                 
                 if (!activeChatContact || activeChatContact.username.toLowerCase() !== senderUser.toLowerCase()) {
                   nextUnreadCounts[senderUser] = (nextUnreadCounts[senderUser] || 0) + 1;
+                } else {
+                  hasActiveUnread = true;
                 }
                 
                 newNotifications.unshift({
@@ -962,6 +966,9 @@ export default function App() {
             
             setUnreadChatCounts(nextUnreadCounts);
             setInboxNotifications(newNotifications.slice(0, 50));
+            if (hasActiveUnread && activeChatContact) {
+              markMessagesAsRead(activeChatContact.username);
+            }
             return nextChats;
           });
         }
@@ -2170,11 +2177,11 @@ export default function App() {
       showToast('Caller cancelled the call.', 'info');
     };
 
-    const handleDirectMessage = (data: { senderUsername: string; senderName: string; text: string; time: string }) => {
-      const { senderUsername, senderName, text, time } = data;
+    const handleDirectMessage = (data: { senderUsername: string; senderName: string; text: string; time: string; messageId?: string }) => {
+      const { senderUsername, senderName, text, time, messageId } = data;
 
       const msg: ChatMessage = {
-        id: uid(),
+        id: messageId || uid(),
         sender: senderName,
         text,
         time,
@@ -2223,6 +2230,10 @@ export default function App() {
           body: `New message: ${text}`,
           tag: `nexalink-lobby-${senderUsername}`,
         });
+        addNotifiedMsgId(msg.id);
+      } else {
+        // We are actively chatting with them. Automatically mark as read on the backend database
+        markMessagesAsRead(senderUsername);
         addNotifiedMsgId(msg.id);
       }
     };
