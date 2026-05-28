@@ -1,8 +1,8 @@
 # 🌐 NexaLink — Premium Secure Real-Time Communications Platform
 
-NexaLink is a state-of-the-art, secure real-time communications application featuring peer-to-peer WebRTC video/audio streaming, collaborative drawing canvases, persistent chat lobbies, Picture-in-Picture (PiP) multitasking, voice-morphing DSP pipelines, and offline-capable Web Push notifications.
+NexaLink is a state-of-the-art, secure real-time communications application featuring peer-to-peer WebRTC video/audio streaming, collaborative drawing canvases, persistent chat lobbies, Picture-in-Picture streaming, and AI-driven voice morphing.
 
-Designed with a high-fidelity glassmorphic visual aesthetic and a robust distributed cloud architecture, NexaLink bridges Vite + React, FastAPI, Node.js Socket.IO, and Supabase into a singular secure collaboration space.
+Designed with a high-fidelity glassmorphic visual aesthetic and a robust distributed cloud architecture, NexaLink bridges Vite + React, FastAPI, Node.js Socket.IO, and Supabase into a singular secure communications ecosystem.
 
 ---
 
@@ -21,11 +21,11 @@ The production infrastructure is distributed across highly optimized cloud provi
 
 ## ✨ Key Premium Features
 
-*   **🎬 WebRTC Grid & Layout Controls:** Adaptive video/audio layout grid supporting visual HTML5 drag-and-drop tile swapping, multi-axis adjustments, dynamic track hide/unhide toggling, and reliable cleanups upon screen-sharing termination.
-*   **🎨 Interactive Collaborative Whiteboard:** Draw, write, and collaborate in real-time. Includes custom premium golden color brushes, local history stacks (Undo/Redo), cloud-saving snapshots directly to Supabase storage, and **collaborative image annotations** (upload local base64 files or paste online image URLs, adjust width/height, draw over images).
+*   **🎬 WebRTC Grid & Layout Controls:** Adaptive video/audio layout grid supporting visual HTML5 drag-and-drop tile swapping, multi-axis adjustments, dynamic track hide/unhide toggling, and reliable P2P connection negotiation.
+*   **🎨 Interactive Collaborative Whiteboard:** Draw, write, and collaborate in real-time. Includes custom premium golden color brushes, local history stacks (Undo/Redo), cloud-saving snapshots directly to Supabase Storage.
 *   **🎤 DSP Voice Morphing & Filters:** Real-time audio pitch shifting/morphing, Whisper filters to amplify sub-ambient sounds, and auto-transcription for capturing logs during mute.
 *   **🤖 Synthetic Voice (TTS):** Integrated Text-to-Speech client with male/female host profiles and custom voice cloning pipelines.
-*   **📱 PWA & Web Push Notification Plane:** Progressive Web App shell backing offline caching capabilities. Intercepts incoming requests and rings background OS-level notifications (Web Push) with active "Accept/Decline" actions even when the browser tab is completely closed.
+*   **📱 PWA & Web Push Notification Plane:** Progressive Web App shell backing offline caching capabilities. Intercepts incoming requests and rings background OS-level notifications (Web Push) with audio alerts.
 *   **🖼️ Floating Picture-in-Picture (PiP):** Manual and automatic picture-in-picture stream representations showing active calls in floating panels when minimized or navigating away.
 
 ---
@@ -72,7 +72,7 @@ graph TD
 
     %% Database operations
     API -->|PostgREST REST queries| DBW
-    API -->|SQL pooling (NullPool)| ORM
+    API -->|SQL pooling via NullPool| ORM
     DBW -->|Tables| PG
     ORM -->|Tables| PG
     UI -->|Cloud Uploads| ST
@@ -192,7 +192,7 @@ Open `http://localhost:5173` in your browser.
 Developers contributing to NexaLink must adhere to the following core constraints:
 
 1.  **Security and Filter Injection Prevention:** All database queries and filters executed via the PostgREST wrapper must be URL-encoded using `urllib.parse.quote()` before request submission.
-2.  **No `localStorage` Usage:** Under no circumstances should session tokens, user data, or sensitive contact lists be written to `localStorage`. Use in-memory React states, tab-scoped `sessionStorage`, or secure backend session endpoints.
+2.  **No `localStorage` Usage:** Under no circumstances should session tokens, user data, or sensitive contact lists be written to `localStorage`. Use in-memory React states, tab-scoped `sessionStorage`, or backend endpoints for persistence.
 3.  **Database Connection Safety:** Ensure all client SQLAlchemy connections bypass transaction poolers (such as PgBouncer) using `sqlalchemy.pool.NullPool` to prevent connection leaks.
 4.  **Verification Before Pushing:**
     Before making commits or submitting pull requests, you must execute the three-phase quality check locally:
