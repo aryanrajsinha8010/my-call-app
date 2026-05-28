@@ -2536,10 +2536,30 @@ export default function App() {
     };
   }, [localStream, inRoom]);
 
+  // Use a callback-ref approach for screen video: sets srcObject immediately
+  // when the DOM element mounts, avoiding the race condition where the
+  // useEffect runs before the tile is rendered.
+  const screenVideoCallbackRef = useCallback(
+    (el: HTMLVideoElement | null) => {
+      screenVideoRef.current = el;
+      if (el && screenStream) {
+        el.srcObject = screenStream;
+        el.play().catch(() => {/* autoplay blocked, user will see muted */});
+      } else if (el) {
+        el.srcObject = null;
+      }
+    },
+    [screenStream]
+  );
+
+  // Fallback: when screenStream changes while the element is already mounted
   useEffect(() => {
     const videoEl = screenVideoRef.current;
     if (videoEl) {
       videoEl.srcObject = screenStream;
+      if (screenStream) {
+        videoEl.play().catch(() => {});
+      }
     }
     return () => {
       if (videoEl) {
@@ -2551,6 +2571,16 @@ export default function App() {
   /* ── Picture-in-Picture (PiP) Handlers ── */
   const [isPipActive, setIsPipActive] = useState(false);
 
+  const ensureVideoReady = (videoEl: HTMLVideoElement): Promise<void> => {
+    return new Promise((resolve) => {
+      if (videoEl.readyState >= 2) { resolve(); return; }
+      const onReady = () => { videoEl.removeEventListener('loadeddata', onReady); resolve(); };
+      videoEl.addEventListener('loadeddata', onReady);
+      // Safety timeout so we don't hang forever
+      setTimeout(() => { videoEl.removeEventListener('loadeddata', onReady); resolve(); }, 500);
+    });
+  };
+
   const toggleManualPip = async () => {
     try {
       if (document.pictureInPictureElement) {
@@ -2558,10 +2588,17 @@ export default function App() {
         setIsPipActive(false);
       } else {
         if (screenStream && screenVideoRef.current) {
-          await screenVideoRef.current.requestPictureInPicture();
+          const el = screenVideoRef.current;
+          // Ensure srcObject is set (may not be if callback ref hasn't fired yet)
+          if (!el.srcObject) el.srcObject = screenStream;
+          await ensureVideoReady(el);
+          await el.requestPictureInPicture();
           setIsPipActive(true);
         } else if (videoEnabled && localVideoRef.current) {
-          await localVideoRef.current.requestPictureInPicture();
+          const el = localVideoRef.current;
+          if (!el.srcObject) el.srcObject = localStream;
+          await ensureVideoReady(el);
+          await el.requestPictureInPicture();
           setIsPipActive(true);
         } else {
           showToast('No active video stream to enter Picture-in-Picture.', 'info');
@@ -2610,13 +2647,19 @@ export default function App() {
       if (document.hidden) {
         try {
           if (screenStream && screenVideoRef.current) {
-            if (document.pictureInPictureElement !== screenVideoRef.current) {
-              await screenVideoRef.current.requestPictureInPicture();
+            const el = screenVideoRef.current;
+            if (document.pictureInPictureElement !== el) {
+              if (!el.srcObject) el.srcObject = screenStream;
+              await ensureVideoReady(el);
+              await el.requestPictureInPicture();
               setIsPipActive(true);
             }
           } else if (videoEnabled && localVideoRef.current) {
-            if (document.pictureInPictureElement !== localVideoRef.current) {
-              await localVideoRef.current.requestPictureInPicture();
+            const el = localVideoRef.current;
+            if (document.pictureInPictureElement !== el) {
+              if (!el.srcObject) el.srcObject = localStream;
+              await ensureVideoReady(el);
+              await el.requestPictureInPicture();
               setIsPipActive(true);
             }
           }
@@ -5193,7 +5236,7 @@ export default function App() {
                           minHeight: 220
                         }}
                       >
-                        <video ref={screenVideoRef} autoPlay playsInline draggable={false}
+                        <video ref={screenVideoCallbackRef} autoPlay playsInline muted draggable={false}
                           className={`w-full h-full ${fitMode === 'cover' ? 'object-cover' : 'object-contain'}`} />
                         <div className="absolute top-3 left-3">
                           <span className="nx-badge nx-badge-rose">
