@@ -101,11 +101,12 @@ e:\calls\
 │   │   ├── index.css           # Global design system (CSS variables, dark theme)
 │   │   ├── hooks/
 │   │   │   ├── useWebRTC.ts        # WebRTC + Socket.IO lifecycle
-│   │   │   ├── useAudioPipeline.ts # Noise suppression + VAD + equaliser
+│   │   │   ├── useAudioPipeline.ts # Granular pitch shifting, premium presets (Helium, Deep, Robot, Radio) & whisper booster
 │   │   │   └── useNotifications.ts # Web Push subscription + SW registration
 │   │   ├── components/
 │   │   │   ├── Whiteboard.tsx      # Collaborative canvas (multi-user drawing)
-│   │   │   └── ChaperoneOverlay.tsx # Remote control safety overlay
+│   │   │   ├── ChaperoneOverlay.tsx # Remote control safety overlay
+│   │   │   └── DiagnosticsPanel.tsx # High-fidelity WebRTC telemetry & chaperone audit dashboard
 │   │   └── lib/                    # Shared utilities
 │   ├── .env                    # VITE_API_URL, VITE_WS_URL, VITE_AI_URL
 │   └── vite.config.ts
@@ -179,7 +180,7 @@ The entire front-end lives in **one file**: `e:\calls\client\src\App.tsx`.
 | `inboxNotifications` | `InboxItem[]` | Notification inbox (calls, msgs) |
 | `incomingCall` | `IncomingCallData \| null` | Incoming call modal data |
 | `chatMessages` | `ChatMessage[]` | Room chat messages (ephemeral) |
-| `activeTab` | `Tab` | Right panel tab in room view |
+| `activeTab` | `Tab` | Right panel tab in room view (`chat` \| `audio` \| `whiteboard` \| `control` \| `participants` \| `profile` \| `contacts` \| `diagnostics`) |
 | `streamLayout` | `'auto' \| 'pip-remote' \| 'pip-local' \| 'equal' \| 'horizontal'` | Video layout |
 | `notifPermission` | `NotificationPermission` | OS push permission state |
 
@@ -193,7 +194,7 @@ const {
   grantedAccessType, socket, stats, volPercent,
   // ... many more WebRTC control fns
 } = useWebRTC(roomName, userName, profile);
-const { noiseEnabled, vadEnabled, ... } = useAudioPipeline(localStream);
+const { volumeLevel, config, setConfig, startPipeline, stopPipeline } = useAudioPipeline();
 ```
 
 ---
@@ -222,8 +223,12 @@ pushSubscriptions // { [username]: PushSubscription } — Web Push subs
 | `ice_candidate` | `{ to, candidate }` | ICE candidate exchange |
 | `chat_message` | `{ roomName, sender, text, time }` | Room chat message |
 | `tts_message` | `{ roomName, sender, text, voice }` | TTS relay |
-| `whiteboard_stroke` | `{ roomName, stroke }` | Whiteboard draw event |
-| `whiteboard_clear` | `{ roomName }` | Clear whiteboard |
+| `draw_event` | `{ roomName, strokeData }` | Whiteboard line draw event |
+| `shape_event` | `{ roomName, shapeData }` | Whiteboard shape draw event (rectangle, circle, line, arrow) |
+| `text_event` | `{ roomName, textData }` | Whiteboard text annotation event |
+| `image_event` | `{ roomName, imageData }` | Whiteboard image annotation event |
+| `clear_whiteboard` | `{ roomName }` | Clear whiteboard |
+| `load_whiteboard` | `{ roomName, url }` | Load whiteboard snapshot |
 | `screen_share_start` | `{ roomName }` | Announce screen share started |
 | `screen_share_stop` | `{ roomName }` | Announce screen share stopped |
 | `update_alias` | `{ userAlias }` | Update display name/avatar |
@@ -249,8 +254,12 @@ pushSubscriptions // { [username]: PushSubscription } — Web Push subs
 | `ice_candidate` | `{ from, candidate }` | ICE candidate from peer |
 | `chat_message` | `{ sender, text, time }` | Incoming room chat |
 | `tts_message` | `{ sender, text, voice }` | Incoming TTS relay |
-| `whiteboard_stroke` | `{ stroke, from }` | Peer drew on whiteboard |
-| `whiteboard_clear` | — | Peer cleared whiteboard |
+| `remote_draw` | `Stroke` | Peer drew on whiteboard |
+| `remote_shape` | `ShapeData` | Peer drew a shape on whiteboard |
+| `remote_text` | `TextData` | Peer added text to whiteboard |
+| `remote_image` | `ImageData` | Peer added image to whiteboard |
+| `remote_clear` | — | Peer cleared whiteboard |
+| `remote_load` | `{ url }` | Peer loaded whiteboard snapshot |
 | `screen_share_started` | `{ participantId }` | Someone started sharing |
 | `screen_share_stopped` | `{ participantId }` | Someone stopped sharing |
 | `remote_control_requested` | `{ requesterName, requesterSocketId, accessType }` | Someone wants control |
@@ -610,8 +619,9 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 | SEC-10 | Rate limiting on auth endpoints (5 req/min per IP) |
 | SEC-12 | Security headers injected on every response |
 | SEC-13 | Internal errors logged server-side, generic message to client |
-| SEC-14 | Whiteboard stroke data validated and sanitised |
+| SEC-14 | Whiteboard stroke and shape data validated and sanitised |
 | SEC-21 | Audio upload: MIME type + file size validated before processing |
+| SEC-22 | P2P File Transfers chunk-by-chunk E2EE (AES-GCM-256 + 12-byte prepended IV) |
 
 ---
 
@@ -619,13 +629,14 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 
 | Area | Current State | Future |
 |---|---|---|
-| Direct messages | DB-backed via REST API + local state | Add real-time socket relay for instant delivery |
+| Direct messages | Client-side E2EE (AES-GCM-256 + PBKDF2) integrated | Done |
+| P2P File Transfers | Chunk-by-chunk E2EE (AES-GCM-256) integrated using derived DM Secrets | Done |
 | AI Sidecar | OpenAI API integrated for Whisper & TTS | Deploy local model weights for fully air-gapped support |
-| Call merge | Multi-room state is local only | Synchronise via signalling server |
+| Call merge | Synchronised via signalling server (`room_merged` event) | Done |
 | RLS policies | Hardened per-user policies active | Fully locked down using `is_signalling_server()` function |
-| Push subscriptions | Database-backed persistence | Stored in `push_subscriptions` DB table with real-time reload |
-| TURN server | No TURN configured | Add coturn for NAT traversal in production |
-| E2EE room chat | Relay-based (server reads plaintext) | Implement Signal Protocol or Olm |
+| Push subscriptions | Database-backed persistence | Done (Background sync every 30s + manual REST reloading) |
+| TURN server | Dynamic RFC 5766 coturn credential generation | Done (HMAC-SHA1 generated in FastAPI Gateway, dynamically loaded by client) |
+| E2EE room chat | Client-side E2EE (AES-GCM-256 + PBKDF2) integrated | Done |
 
 ---
 
@@ -654,7 +665,10 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 | DB schema changes | `infra/migrations/supabase_schema.sql` |
 | AI features | `ai-sidecar/main.py` |
 | Desktop kill-switch | `desktop-agent/main.js` |
+| Cryptography / E2EE | `client/src/lib/e2ee.ts` |
 
 ---
 
-*Last updated: 2026-05-29 — Updated by NexaLink Autonomous Evolution Agent (Connected OpenAI Whisper & TTS API to AI Sidecar).*
+*Last updated: 2026-05-29 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented chunk-by-chunk End-to-End Encryption (E2EE) using AES-GCM-256 for WebRTC P2P File Transfers; developed client-side cryptographic encryption/decryption pipelines with prepended 12-byte initialization vectors in `e2ee.ts`; fully integrated the secure handshake in the `App.tsx` receiver and sender WebRTC event streams with real-time UI/UX state updates, premium emerald lock badges, custom glassmorphic progress cards, and fail-safe remote cancel protocols; Implemented dynamic TURN server RFC 5766 coturn credential generation in FastAPI API Gateway, dynamic frontend client auto-discovery and loading for WebRTC, and real-time push subscriptions background synchronization reload in the Node.js signaling server; Integrated the DiagnosticsPanel sidebar tab for real-time WebRTC connection stats, network metrics, bandwidth charts, DSP codec information, and security audit logs, fueled by upgraded live RTCPeerConnection telemetry API hooks; Developed and fully integrated real-time AI speech-to-text transcription, live floating closed captions broadcasting overlays, and deep NLP-driven action item & meeting minutes summary extraction panels, backed by real-time signaling data relay, automated multi-mime recording loops, and connection to the AI Sidecar microservice; Designed and implemented high-fidelity real-time vocal morphing and DSP voice preservation, powered by a custom granular overlap-add Pitch Shifter Web Audio node and premium sound presets including Helium, Deep Monster, metallic Ring Modulator robot voice, and vintage walkie-talkie analog bandpass distortion; Designed and implemented a dynamic dual-path TTS (Text-to-Speech) transmission pipeline integrated inside the voice panel, supporting real-time premium neural speech generation using AI Sidecar (FastAPI) and seamless offline fallback to the Web Speech API (local OS voices), featuring vocal pitch control, and multi-user synchronized socket relays for high-fidelity communication).*
+
+

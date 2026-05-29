@@ -64,6 +64,11 @@ if not JWT_SECRET_KEY:
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_MINUTES = 60
 
+# WebRTC ICE Server Configurations (COTURN Integration)
+TURN_SERVER_URLS_RAW = os.getenv("TURN_SERVER_URLS", "")
+TURN_SERVER_URLS = [u.strip() for u in TURN_SERVER_URLS_RAW.split(",") if u.strip()]
+TURN_STATIC_AUTH_SECRET = os.getenv("TURN_STATIC_AUTH_SECRET", "")
+
 # Configure structured logging (suppress raw tracebacks from HTTP layer)
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("nexalink")
@@ -713,6 +718,50 @@ def respond_to_file_transfer(transfer_id: int, data: FileTransferResponse, curre
         return {"status": "SUCCESS", "transfer": transfer}
     except Exception as e:
         raise _safe_error(e, "Failed to respond to file transfer.")
+
+
+@app.get("/api/webrtc/ice_servers")
+def get_webrtc_ice_servers(current_user: dict = Depends(get_current_user)):
+    """
+    Generate dynamic, time-limited coturn TURN credentials using a shared secret,
+    allowing secure WebRTC NAT traversal (RFC 5766) in production environments.
+    Falls back to a secure public STUN configuration if TURN is not configured.
+    """
+    import hmac
+    import hashlib
+    import base64
+
+    # Base STUN configuration
+    ice_servers = [
+        {"urls": ["stun:stun.l.google.com:19302"]}
+    ]
+    
+    if TURN_SERVER_URLS and TURN_STATIC_AUTH_SECRET:
+        try:
+            # Dynamic credentials expire in 2 hours
+            expiry_secs = 7200
+            expiration_timestamp = int(time.time()) + expiry_secs
+            username = f"{expiration_timestamp}:{current_user.get('username', 'user')}"
+            
+            # HMAC-SHA1 signature of username with the shared coturn secret
+            digest = hmac.new(
+                TURN_STATIC_AUTH_SECRET.encode("utf-8"),
+                username.encode("utf-8"),
+                hashlib.sha1
+            ).digest()
+            credential = base64.b64encode(digest).decode("utf-8")
+            
+            ice_servers.append({
+                "urls": TURN_SERVER_URLS,
+                "username": username,
+                "credential": credential
+            })
+            logger.info(f"[WebRTC] Generated dynamic TURN credentials for user: {current_user.get('username')}")
+        except Exception as e:
+            logger.error(f"[WebRTC] Error generating TURN credentials: {e}")
+            # Safe STUN-only fallback
+            
+    return {"iceServers": ice_servers}
 
 
 # ════════════════════════════════════════════════════════════════════════════

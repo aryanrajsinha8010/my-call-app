@@ -269,6 +269,14 @@ async function deleteDirectMessageInDb(messageId, sender) {
 // Load on startup
 loadPushSubscriptionsFromDb();
 
+// Periodic sync (real-time reload): fetch latest subscriptions from DB every 30 seconds
+// This ensures multiple instances of the signalling server stay in sync without restarts.
+setInterval(() => {
+  loadPushSubscriptionsFromDb().catch(err => {
+    console.error('[WebPush] Error during periodic DB sync:', err.message);
+  });
+}, 30000);
+
 
 /**
  * Send a Web Push notification to a user who may be offline.
@@ -414,6 +422,20 @@ app.get('/vapid-public-key', (req, res) => {
   res.json({ publicKey: VAPID_PUBLIC });
 });
 
+/** Manual trigger to immediately reload/refresh push subscriptions from Supabase DB */
+app.post('/api/push/reload', async (req, res) => {
+  try {
+    await loadPushSubscriptionsFromDb();
+    res.json({
+      success: true,
+      message: 'Push subscriptions sync triggered successfully.',
+      count: Object.keys(pushSubscriptions).length
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /**
  * Client POSTs its PushSubscription + username here.
  * Body: { username: string, subscription: PushSubscription }
@@ -550,6 +572,32 @@ function sanitizeStroke(stroke) {
     size: Math.max(1, Math.min(50, Number(stroke.size) || 4)),
     color,
     isEraser: stroke.isEraser === true, // strict boolean, not truthy
+  };
+}
+
+// --- SEC-14 FIX: Validate and sanitize whiteboard shape data ---
+function sanitizeShape(shape) {
+  if (!shape || typeof shape !== 'object') return null;
+
+  const validTypes = ['rectangle', 'circle', 'line', 'arrow'];
+  const type = typeof shape.type === 'string' && validTypes.includes(shape.type)
+    ? shape.type
+    : 'rectangle';
+
+  const colorRegex = /^(#[0-9a-fA-F]{3,8}|rgba?\(\d{1,3},\s*\d{1,3},\s*\d{1,3}(,\s*[\d.]+)?\)|[a-zA-Z]{3,20})$/;
+  const color = typeof shape.color === 'string' && colorRegex.test(shape.color.trim())
+    ? shape.color.trim()
+    : '#dcb16b'; // gold fallback
+
+  return {
+    type,
+    startX: Math.max(-10000, Math.min(10000, Number(shape.startX) || 0)),
+    startY: Math.max(-10000, Math.min(10000, Number(shape.startY) || 0)),
+    endX: Math.max(-10000, Math.min(10000, Number(shape.endX) || 0)),
+    endY: Math.max(-10000, Math.min(10000, Number(shape.endY) || 0)),
+    color,
+    size: Math.max(1, Math.min(50, Number(shape.size) || 4)),
+    fill: shape.fill === true,
   };
 }
 
@@ -741,12 +789,14 @@ io.on('connection', (socket) => {
   });
 
 
-  socket.on('tts_message', ({ roomName, sender, text, voice }) => {
+  socket.on('tts_message', ({ roomName, sender, text, voice, mode, pitchFactor }) => {
     if (!roomName || typeof text !== 'string' || !text.trim()) return;
     socket.to(roomName).emit('tts_message', {
       sender: typeof sender === 'string' ? sender.slice(0, 80) : 'Peer',
       text: text.slice(0, 600),
       voice: typeof voice === 'string' ? voice.slice(0, 80) : 'Default',
+      mode: typeof mode === 'string' ? mode.slice(0, 20) : 'neural',
+      pitchFactor: typeof pitchFactor === 'number' ? pitchFactor : 1.0,
     });
   });
 
@@ -847,12 +897,25 @@ io.on('connection', (socket) => {
     socket.to(roomName).emit('remote_draw', clean);
   });
 
+  socket.on('shape_event', ({ roomName, shapeData }) => {
+    const clean = sanitizeShape(shapeData);
+    if (!clean) {
+      console.warn(`[Security] Invalid shape data from ${socket.id} — dropped.`);
+      return;
+    }
+    socket.to(roomName).emit('remote_shape', clean);
+  });
+
   socket.on('clear_whiteboard', ({ roomName }) => {
     socket.to(roomName).emit('remote_clear');
   });
 
   socket.on('load_whiteboard', ({ roomName, url }) => {
     socket.to(roomName).emit('remote_load', { url });
+  });
+
+  socket.on('transcription_event', ({ roomName, sender, text }) => {
+    socket.to(roomName).emit('remote_transcription', { sender, text });
   });
 
   socket.on('text_event', ({ roomName, textData }) => {
@@ -941,7 +1004,7 @@ io.on('connection', (socket) => {
   // Target responds: accepted | declined | merged
   // Payload: { callerId, response: 'accepted'|'declined'|'merged' }
   // Also clears any pending push-ringing timeout for the caller.
-  socket.on('call_response', ({ callerId, response }) => {
+  socket.on('call_response', ({ callerId, response, currentRoom, targetRoom }) => {
     if (typeof callerId !== 'string') return;
     const allowed = ['accepted', 'declined', 'merged'];
     const safeResponse = allowed.includes(response) ? response : 'declined';
@@ -955,6 +1018,13 @@ io.on('connection', (socket) => {
 
     io.to(callerId).emit('call_response', { response: safeResponse, responderId: socket.id });
     console.log(`[Call] Response from <${socket.id}> to <${callerId}>: ${safeResponse}`);
+
+    // If responder merged, broadcast room redirect instruction to all other peers in currentRoom
+    if (safeResponse === 'merged' && currentRoom && targetRoom) {
+      console.log(`[Call] Call merge synchronisation: Redirecting participants in <${currentRoom}> to <${targetRoom}>`);
+      const mergerName = socket.data?.user?.username || registeredUsername || 'Host';
+      socket.to(currentRoom).emit('room_merged', { targetRoom, mergedBy: mergerName });
+    }
   });
 
   // Caller cancels before target responds — also clears push-ringing timeout

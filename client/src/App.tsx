@@ -8,7 +8,7 @@ import {
   AlertTriangle, Headphones, Copy, PhoneCall,
   LayoutGrid, LayoutPanelLeft, LayoutPanelTop, PictureInPicture2, Columns2, Columns3, Paperclip,
   Plus, User, BookUser, ImagePlus, Save, Pin, PinOff, Maximize2, Scan, MousePointer, Keyboard,
-  Bell, Download, Trash
+  Bell, Download, Trash, Sparkles
 } from 'lucide-react';
 import { useWebRTC, Participant } from './hooks/useWebRTC.ts';
 import { useAudioPipeline } from './hooks/useAudioPipeline.ts';
@@ -16,9 +16,12 @@ import { useNotifications } from './hooks/useNotifications.ts';
 import Whiteboard from './components/Whiteboard.tsx';
 import ChaperoneOverlay from './components/ChaperoneOverlay.tsx';
 import { LandingPage } from './components/LandingPage.tsx';
+import { encryptText, decryptText, deriveKeyFromPassphrase, encryptChunk, decryptChunk } from './lib/e2ee.ts';
+
 
 const API = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8001';
 const WS_URL = (import.meta as any).env?.VITE_WS_URL || 'http://localhost:8000';
+const AI = (import.meta as any).env?.VITE_AI_URL || 'http://localhost:8002';
 
 /* ─────────────────────────────────────────
    Types
@@ -27,6 +30,7 @@ interface ChatMessage {
   id: string;
   sender: string;
   text: string;
+  decryptedText?: string;
   time: string;
   self: boolean;
   status?: 'sending' | 'delivered';
@@ -387,6 +391,133 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [unreadChat, setUnreadChat] = useState(0);
+
+  /* Client-Side E2EE Room & DM States */
+  const [roomPassphrase, setRoomPassphrase] = useState('');
+  const [roomE2eeKey, setRoomE2eeKey] = useState<CryptoKey | null>(null);
+  const roomE2eeKeyRef = useRef<CryptoKey | null>(null);
+  useEffect(() => {
+    roomE2eeKeyRef.current = roomE2eeKey;
+  }, [roomE2eeKey]);
+
+  const [dmSecrets, setDmSecrets] = useState<{ [contactUsername: string]: string }>(() => {
+    try {
+      const saved = localStorage.getItem('nexalink_dm_secrets');
+      return saved ? JSON.parse(saved) : {};
+    } catch (err) {
+      return {};
+    }
+  });
+  const [dmCryptoKeys, setDmCryptoKeys] = useState<{ [contactUsername: string]: CryptoKey }>({});
+  const dmCryptoKeysRef = useRef<{ [contactUsername: string]: CryptoKey }>({});
+  useEffect(() => {
+    dmCryptoKeysRef.current = dmCryptoKeys;
+  }, [dmCryptoKeys]);
+
+  const sortUsernames = (u1: string, u2: string) => [u1.toLowerCase(), u2.toLowerCase()].sort().join(':');
+
+  useEffect(() => {
+    localStorage.setItem('nexalink_dm_secrets', JSON.stringify(dmSecrets));
+    const deriveAllKeys = async () => {
+      const newKeys: { [contactUsername: string]: CryptoKey } = {};
+      for (const [username, secret] of Object.entries(dmSecrets)) {
+        if (secret.trim()) {
+          try {
+            newKeys[username] = await deriveKeyFromPassphrase(secret, sortUsernames(userName, username));
+          } catch (err) {
+            console.error(`Failed to derive key for contact ${username}:`, err);
+          }
+        }
+      }
+      setDmCryptoKeys(newKeys);
+    };
+    deriveAllKeys();
+  }, [dmSecrets, userName]);
+
+  const handleSetDmSecret = async (contactUsername: string, secret: string) => {
+    setDmSecrets(prev => ({ ...prev, [contactUsername]: secret }));
+    if (!secret.trim()) {
+      setDmCryptoKeys(prev => {
+        const copy = { ...prev };
+        delete copy[contactUsername];
+        return copy;
+      });
+      return;
+    }
+    try {
+      const key = await deriveKeyFromPassphrase(secret, sortUsernames(userName, contactUsername));
+      setDmCryptoKeys(prev => ({ ...prev, [contactUsername]: key }));
+      
+      setLobbyChats(prev => {
+        const history = prev[contactUsername];
+        if (!history) return prev;
+        
+        const updated = history.map(m => {
+          if (m.text.startsWith('[E2EE]:')) {
+            decryptText(m.text, key).then(decrypted => {
+              setLobbyChats(latest => {
+                const latestHistory = latest[contactUsername];
+                if (!latestHistory) return latest;
+                return {
+                  ...latest,
+                  [contactUsername]: latestHistory.map(item => item.id === m.id ? { ...item, decryptedText: decrypted } : item)
+                };
+              });
+            }).catch(() => {
+              setLobbyChats(latest => {
+                const latestHistory = latest[contactUsername];
+                if (!latestHistory) return latest;
+                return {
+                  ...latest,
+                  [contactUsername]: latestHistory.map(item => item.id === m.id ? { ...item, decryptedText: '🔒 [Decryption Failed - Invalid Passphrase]' } : item)
+                };
+              });
+            });
+          }
+          return m;
+        });
+        
+        return {
+          ...prev,
+          [contactUsername]: updated
+        };
+      });
+    } catch (err) {
+      console.error("Failed to derive E2EE key for DM:", err);
+    }
+  };
+
+  const handleSetRoomPassphrase = async (passphrase: string) => {
+    setRoomPassphrase(passphrase);
+    if (!passphrase.trim()) {
+      setRoomE2eeKey(null);
+      return;
+    }
+    try {
+      const key = await deriveKeyFromPassphrase(passphrase, roomName);
+      setRoomE2eeKey(key);
+      
+      setChatMessages(prev => {
+        return prev.map(m => {
+          if (m.text.startsWith('[E2EE]:')) {
+            decryptText(m.text, key).then(decrypted => {
+              setChatMessages(latest => {
+                return latest.map(item => item.id === m.id ? { ...item, decryptedText: decrypted } : item);
+              });
+            }).catch(() => {
+              setChatMessages(latest => {
+                return latest.map(item => item.id === m.id ? { ...item, decryptedText: '🔒 [Decryption Failed - Invalid Passphrase]' } : item);
+              });
+            });
+          }
+          return m;
+        });
+      });
+    } catch (err) {
+      console.error("Failed to derive E2EE key for room:", err);
+    }
+  };
+
   const chatEndRef = useRef<HTMLDivElement>(null);
   const callStageRef = useRef<HTMLDivElement | null>(null);
 
@@ -394,6 +525,21 @@ export default function App() {
   const [ttsText, setTtsText] = useState('');
   const [selectedVoice, setSelectedVoice] = useState('XTTS-v2 Host Male');
   const [ttsQueue, setTtsQueue] = useState<string[]>([]);
+  const [ttsMode, setTtsMode] = useState<'neural' | 'browser'>('neural');
+  const [ttsPitchFactor, setTtsPitchFactor] = useState<number>(1.0);
+  const [browserVoices, setBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      const loadVoices = () => {
+        setBrowserVoices(window.speechSynthesis.getVoices());
+      };
+      loadVoices();
+      if (window.speechSynthesis.onvoiceschanged !== undefined) {
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+      }
+    }
+  }, []);
 
 
 
@@ -438,6 +584,7 @@ export default function App() {
     speed: string;
     status: 'connecting' | 'transferring' | 'completed' | 'failed' | 'idle';
     role: 'sender' | 'receiver';
+    isEncrypted?: boolean;
   } | null>(null);
   const [inboxNotifications, setInboxNotifications] = useState<{ id: string; type: 'chat' | 'call'; sender: string; title: string; desc: string; time: string; read: boolean; room?: string; fileTransferId?: number }[]>(() => {
     const saved = sessionStorage.getItem('nexalink_notifications');
@@ -562,19 +709,30 @@ export default function App() {
     sessionStorage.setItem('nexalink_notifications', JSON.stringify(inboxNotifications));
   }, [inboxNotifications]);
 
-  const sendLobbyChat = () => {
+  const sendLobbyChat = async () => {
     if (!activeChatContact || !lobbyChatInput.trim()) return;
     if (!socket) {
       showToast("Chat server is unavailable.", "error");
       return;
     }
-    const msgText = lobbyChatInput.trim();
+    const rawText = lobbyChatInput.trim();
     const clientMsgId = `client-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    
+    let textToSend = rawText;
+    const key = dmCryptoKeys[activeChatContact.username];
+    if (key) {
+      try {
+        textToSend = await encryptText(rawText, key);
+      } catch (err) {
+        console.error("Encryption failed:", err);
+      }
+    }
     
     const msg: ChatMessage = {
       id: clientMsgId,
       sender: profile.username || userName,
-      text: msgText,
+      text: textToSend,
+      decryptedText: key ? rawText : undefined,
       time: nowTime(),
       self: true,
       status: 'sending' as const
@@ -592,26 +750,36 @@ export default function App() {
       targetUsername: activeChatContact.username,
       senderUsername: userName,
       senderName: profile.username || userName,
-      text: msgText,
+      text: textToSend,
       clientMsgId
     });
     
     setLobbyChatInput('');
   };
 
-  const saveMessageEdit = (messageId: string, contactUsername: string) => {
+  const saveMessageEdit = async (messageId: string, contactUsername: string) => {
     if (!editingText.trim()) return;
     if (!socket) {
       showToast("Chat server is unavailable.", "error");
       return;
     }
-    const editedText = editingText.trim();
+    const rawText = editingText.trim();
+    let textToSend = rawText;
+    
+    const key = dmCryptoKeys[contactUsername];
+    if (key) {
+      try {
+        textToSend = await encryptText(rawText, key);
+      } catch (err) {
+        console.error("Encryption failed:", err);
+      }
+    }
     
     setLobbyChats(prev => {
       const chatHistory = prev[contactUsername] || [];
       const updatedHistory = chatHistory.map(m => {
         if (m.id === messageId) {
-          return { ...m, text: editedText };
+          return { ...m, text: textToSend, decryptedText: key ? rawText : undefined };
         }
         return m;
       });
@@ -624,7 +792,7 @@ export default function App() {
     socket.emit('direct_message_edit', {
       targetUsername: contactUsername,
       messageId,
-      text: editedText,
+      text: textToSend,
       senderUsername: userName
     });
     
@@ -807,12 +975,28 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
-        const chatMsgs = data.map((msg: any) => ({
-          id: String(msg.id),
-          sender: msg.sender,
-          text: msg.text,
-          time: new Date(msg.sent_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-          self: msg.sender.toLowerCase() === userName.toLowerCase()
+        const chatMsgs = await Promise.all(data.map(async (msg: any) => {
+          let decryptedText = undefined;
+          if (msg.text.startsWith('[E2EE]:')) {
+            const key = dmCryptoKeysRef.current[otherUser];
+            if (key) {
+              try {
+                decryptedText = await decryptText(msg.text, key);
+              } catch (err) {
+                decryptedText = '🔒 [Decryption Failed - Invalid Passphrase]';
+              }
+            } else {
+              decryptedText = '🔒 [Encrypted Message - Enter passphrase to decrypt]';
+            }
+          }
+          return {
+            id: String(msg.id),
+            sender: msg.sender,
+            text: msg.text,
+            decryptedText,
+            time: new Date(msg.sent_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+            self: msg.sender.toLowerCase() === userName.toLowerCase()
+          };
         }));
         setLobbyChats(prev => ({
           ...prev,
@@ -1009,10 +1193,15 @@ export default function App() {
       const data = await res.json();
       const transferId = data.transfer_id;
 
+      const keyEntry = Object.entries(dmCryptoKeysRef.current).find(
+        ([k]) => k.toLowerCase() === activeChatContact.username.toLowerCase()
+      );
+      const isEncrypted = !!keyEntry;
+
       const msg: ChatMessage = {
         id: `file-init-${transferId}`,
         sender: profile.username || userName,
-        text: `📁 Initiated file transfer request: ${file.name} (${(file.size / (1024*1024)).toFixed(2)} MB)`,
+        text: `${isEncrypted ? '🔒 [E2EE] ' : '📁 '}Initiated file transfer request: ${file.name} (${(file.size / (1024*1024)).toFixed(2)} MB)`,
         time: nowTime(),
         self: true
       };
@@ -1043,7 +1232,8 @@ export default function App() {
         progress: 0,
         speed: '0.00 KB/s',
         status: 'connecting',
-        role: 'sender'
+        role: 'sender',
+        isEncrypted
       });
       
     } catch (err) {
@@ -1053,6 +1243,11 @@ export default function App() {
   };
 
   const initiateFilePeerConnection = async (recipient: string, file: File, transferId: number) => {
+    const keyEntry = Object.entries(dmCryptoKeysRef.current).find(
+      ([k]) => k.toLowerCase() === recipient.toLowerCase()
+    );
+    const isEncrypted = !!keyEntry;
+
     setFileTransferProgress({
       transferId,
       fileName: file.name,
@@ -1060,7 +1255,8 @@ export default function App() {
       progress: 0,
       speed: '0.00 KB/s',
       status: 'connecting',
-      role: 'sender'
+      role: 'sender',
+      isEncrypted
     });
 
     const pc = new RTCPeerConnection({
@@ -1083,7 +1279,7 @@ export default function App() {
 
     channel.onopen = () => {
       console.log('[WebRTC File] Data Channel opened! Streaming file...');
-      sendFileInChunks(file, channel, transferId);
+      sendFileInChunks(file, channel, transferId, recipient);
     };
 
     channel.onclose = () => {
@@ -1118,7 +1314,7 @@ export default function App() {
     }
   };
 
-  const sendFileInChunks = (file: File, channel: RTCDataChannel, transferId: number) => {
+  const sendFileInChunks = (file: File, channel: RTCDataChannel, transferId: number, recipient: string) => {
     console.log(`[WebRTC File] Initiating chunked stream for transfer ID: ${transferId}`);
     const CHUNK_SIZE = 16384;
     const reader = new FileReader();
@@ -1142,8 +1338,37 @@ export default function App() {
       sendChunk(buffer);
     };
 
-    const sendChunk = (buffer: ArrayBuffer) => {
-      channel.send(buffer);
+    const sendChunk = async (buffer: ArrayBuffer) => {
+      let dataToSend: ArrayBuffer = buffer;
+      const keyEntry = Object.entries(dmCryptoKeysRef.current).find(
+        ([k]) => k.toLowerCase() === recipient.toLowerCase()
+      );
+      if (keyEntry) {
+        try {
+          dataToSend = await encryptChunk(buffer, keyEntry[1]);
+        } catch (err) {
+          console.error("[WebRTC File] Encryption failed:", err);
+          setFileTransferProgress(prev => prev ? { ...prev, status: 'failed' } : null);
+          cleanupFilePeerConnection();
+          showToast('Failed to encrypt file chunk.', 'error');
+          return;
+        }
+      }
+
+      if (channel.readyState !== 'open') {
+        console.warn("[WebRTC File] Data channel is not open. State:", channel.readyState);
+        return;
+      }
+
+      try {
+        channel.send(dataToSend);
+      } catch (err) {
+        console.error("[WebRTC File] Failed to send chunk over data channel:", err);
+        setFileTransferProgress(prev => prev ? { ...prev, status: 'failed' } : null);
+        cleanupFilePeerConnection();
+        return;
+      }
+
       offset += buffer.byteLength;
 
       const elapsed = (Date.now() - startTime) / 1000;
@@ -1165,7 +1390,9 @@ export default function App() {
         readSlice(offset);
       } else {
         setTimeout(() => {
-          channel.send('{DONE}');
+          try {
+            channel.send('{DONE}');
+          } catch (ce) {}
           setFileTransferProgress(prev => prev ? { ...prev, status: 'completed', progress: 100 } : null);
           showToast(`File transfer complete: ${file.name}`, 'success');
           selectedFileRef.current = null;
@@ -1206,6 +1433,11 @@ export default function App() {
       });
     }
 
+    const keyEntry = Object.entries(dmCryptoKeysRef.current).find(
+      ([k]) => k.toLowerCase() === transfer.sender.toLowerCase()
+    );
+    const isEncrypted = !!keyEntry;
+
     setFileTransferProgress({
       transferId,
       fileName: transfer.file_name,
@@ -1213,7 +1445,8 @@ export default function App() {
       progress: 0,
       speed: '0.00 KB/s',
       status: 'connecting',
-      role: 'receiver'
+      role: 'receiver',
+      isEncrypted
     });
 
     const pc = new RTCPeerConnection({
@@ -1239,7 +1472,7 @@ export default function App() {
       const channel = event.channel;
       fileDataChannelRef.current = channel;
 
-      channel.onmessage = (e) => {
+      channel.onmessage = async (e) => {
         if (typeof e.data === 'string') {
           if (e.data === '{CANCEL}') {
             console.log('[WebRTC File] Cancelled by remote peer!');
@@ -1267,8 +1500,25 @@ export default function App() {
         }
 
         const buffer = e.data as ArrayBuffer;
-        receivedBuffers.push(buffer);
-        receivedSize += buffer.byteLength;
+        let dataToAppend: ArrayBuffer = buffer;
+
+        if (isEncrypted && keyEntry) {
+          try {
+            dataToAppend = await decryptChunk(buffer, keyEntry[1]);
+          } catch (err) {
+            console.error("[WebRTC File] Decryption failed:", err);
+            cleanupFilePeerConnection();
+            setFileTransferProgress(prev => prev ? { ...prev, status: 'failed' } : null);
+            showToast('Decryption failed! Please verify your E2EE DM Secret.', 'error');
+            try {
+              channel.send('{CANCEL}');
+            } catch (ce) {}
+            return;
+          }
+        }
+
+        receivedBuffers.push(dataToAppend);
+        receivedSize += dataToAppend.byteLength;
 
         const elapsed = (Date.now() - startTime) / 1000;
         const speedBps = elapsed > 0 ? (receivedSize / elapsed) : 0;
@@ -2137,13 +2387,28 @@ export default function App() {
       showToast('Caller cancelled the call.', 'info');
     };
 
-    const handleDirectMessage = (data: { senderUsername: string; senderName: string; text: string; time: string; messageId?: string }) => {
+    const handleDirectMessage = async (data: { senderUsername: string; senderName: string; text: string; time: string; messageId?: string }) => {
       const { senderUsername, senderName, text, time, messageId } = data;
+
+      let decryptedText = undefined;
+      if (text.startsWith('[E2EE]:')) {
+        const key = dmCryptoKeysRef.current[senderUsername];
+        if (key) {
+          try {
+            decryptedText = await decryptText(text, key);
+          } catch (err) {
+            decryptedText = '🔒 [Decryption Failed - Invalid Passphrase]';
+          }
+        } else {
+          decryptedText = '🔒 [Encrypted Message - Enter passphrase to decrypt]';
+        }
+      }
 
       const msg: ChatMessage = {
         id: messageId || uid(),
         sender: senderName,
         text,
+        decryptedText,
         time,
         self: false
       };
@@ -2180,14 +2445,14 @@ export default function App() {
           type: 'chat',
           sender: senderUsername,
           title: `New message from ${senderName}`,
-          desc: text,
+          desc: decryptedText || text,
           time: nowTime(),
           read: false
         }, ...prev.slice(0, 49)]);
 
         notify('update', {
           sender: senderUsername,
-          body: `New message: ${text}`,
+          body: `New message: ${decryptedText || text}`,
           tag: `nexalink-lobby-${senderUsername}`,
         });
         addNotifiedMsgId(msg.id);
@@ -2198,13 +2463,26 @@ export default function App() {
       }
     };
 
-    const handleDirectMessageEdit = (data: { messageId: string; text: string; senderUsername: string }) => {
+    const handleDirectMessageEdit = async (data: { messageId: string; text: string; senderUsername: string }) => {
       const { messageId, text, senderUsername } = data;
+      let decryptedText = undefined;
+      if (text.startsWith('[E2EE]:')) {
+        const key = dmCryptoKeysRef.current[senderUsername];
+        if (key) {
+          try {
+            decryptedText = await decryptText(text, key);
+          } catch (err) {
+            decryptedText = '🔒 [Decryption Failed - Invalid Passphrase]';
+          }
+        } else {
+          decryptedText = '🔒 [Encrypted Message - Enter passphrase to decrypt]';
+        }
+      }
       setLobbyChats(prev => {
         const chatHistory = prev[senderUsername] || [];
         const updatedHistory = chatHistory.map(m => {
           if (m.id === messageId) {
-            return { ...m, text };
+            return { ...m, text, decryptedText };
           }
           return m;
         });
@@ -2691,21 +2969,56 @@ export default function App() {
   };
 
   /* ── Chat ─────────────────────────── */
-  const sendChat = () => {
+  const sendChat = async () => {
     if (!chatInput.trim()) return;
+    const rawText = chatInput.trim();
+    let textToSend = rawText;
+    
+    // Encrypt if roomE2eeKey is available
+    if (roomE2eeKeyRef.current) {
+      try {
+        textToSend = await encryptText(rawText, roomE2eeKeyRef.current);
+      } catch (err) {
+        console.error("Encryption failed:", err);
+      }
+    }
+    
     const msg: ChatMessage = {
-      id: uid(), sender: myAlias.name, text: chatInput.trim(),
-      time: nowTime(), self: true,
+      id: uid(), 
+      sender: myAlias.name, 
+      text: textToSend,
+      decryptedText: roomE2eeKeyRef.current ? rawText : undefined,
+      time: nowTime(), 
+      self: true,
     };
+    
     setChatMessages(prev => [...prev, msg]);
-    if (socket) socket.emit('chat_message', { roomName, sender: myAlias.name, text: chatInput.trim(), time: msg.time });
+    if (socket) socket.emit('chat_message', { roomName, sender: myAlias.name, text: textToSend, time: msg.time });
     setChatInput('');
   };
 
   useEffect(() => {
     if (!socket) return;
-    const handler = (data: { sender: string; text: string; time: string }) => {
-      setChatMessages(prev => [...prev, { id: uid(), ...data, self: false }]);
+    const handler = async (data: { sender: string; text: string; time: string }) => {
+      let decryptedText = undefined;
+      if (data.text.startsWith('[E2EE]:')) {
+        if (roomE2eeKeyRef.current) {
+          try {
+            decryptedText = await decryptText(data.text, roomE2eeKeyRef.current);
+          } catch (err) {
+            decryptedText = '🔒 [Decryption Failed - Invalid Passphrase]';
+          }
+        } else {
+          decryptedText = '🔒 [Encrypted Message - Enter passphrase to decrypt]';
+        }
+      }
+
+      setChatMessages(prev => [...prev, { 
+        id: uid(), 
+        ...data, 
+        decryptedText, 
+        self: false 
+      }]);
       setActiveTab(currentTab => {
         if (currentTab !== 'chat') {
           setUnreadChat(prev => prev + 1);
@@ -2715,7 +3028,7 @@ export default function App() {
       // OS push notification — fires only when the tab is hidden/blurred
       notify('update', {
         sender: data.sender,
-        body: 'NexaLink received an update',
+        body: decryptedText || 'NexaLink received an update',
         tag: 'nexalink-chat',
         onClick: () => setActiveTab('chat'),
       });
@@ -2725,14 +3038,50 @@ export default function App() {
   }, [socket, notify]);
 
   /* ── TTS ─────────────────────────── */
-  const speakText = useCallback((text: string, voiceName: string) => {
+  const speakText = useCallback(async (text: string, voiceName: string, mode: 'neural' | 'browser' = 'neural', pitch: number = 1.0) => {
+    if (mode === 'neural') {
+      try {
+        const res = await fetch(`${AI}/api/ai/tts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: text,
+            voice: voiceName,
+            pitch_factor: pitch
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === 'SUCCESS' && data.base64_audio) {
+            const audioSrc = `data:audio/mp3;base64,${data.base64_audio}`;
+            const audio = new Audio(audioSrc);
+            audio.play();
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('[TTS] Failed to play premium neural voice, falling back to local speech synthesis:', err);
+      }
+    }
+
     if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
       const utt = new SpeechSynthesisUtterance(text);
       const voices = window.speechSynthesis.getVoices();
-      if (voiceName.includes('Female')) {
-        const femaleVoice = voices.find(v => v.name.toLowerCase().includes('female') || v.name.includes('Zira'));
+      
+      const lowercaseVoice = voiceName.toLowerCase();
+      const selectedBrowserVoice = voices.find(v => v.name === voiceName);
+      if (selectedBrowserVoice) {
+        utt.voice = selectedBrowserVoice;
+      } else if (lowercaseVoice.includes('female') || lowercaseVoice.includes('nova') || lowercaseVoice.includes('shimmer')) {
+        const femaleVoice = voices.find(v => v.name.toLowerCase().includes('female') || v.name.includes('Zira') || v.name.toLowerCase().includes('google us english'));
         if (femaleVoice) utt.voice = femaleVoice;
+      } else {
+        const maleVoice = voices.find(v => v.name.toLowerCase().includes('male') || v.name.includes('David') || v.name.toLowerCase().includes('google uk english male'));
+        if (maleVoice) utt.voice = maleVoice;
       }
+
+      utt.pitch = pitch;
       utt.rate = 0.96;
       utt.volume = 0.92;
       window.speechSynthesis.speak(utt);
@@ -2741,9 +3090,11 @@ export default function App() {
 
   useEffect(() => {
     if (!socket) return;
-    const handler = (data: { sender: string; text: string; voice: string }) => {
+    const handler = (data: { sender: string; text: string; voice: string; mode?: 'neural' | 'browser'; pitchFactor?: number }) => {
+      const mode = data.mode || 'neural';
+      const pitch = data.pitchFactor !== undefined ? data.pitchFactor : 1.0;
       setTtsQueue(prev => [...prev, `${data.sender}: "${data.text}"`]);
-      speakText(data.text, data.voice);
+      speakText(data.text, data.voice, mode, pitch);
       showToast(`Synthetic voice from ${data.sender}`, 'info');
     };
     socket.on('tts_message', handler);
@@ -2753,10 +3104,18 @@ export default function App() {
   const queueTTS = () => {
     const cleanText = ttsText.trim();
     if (!cleanText) return;
-    const entry = `${selectedVoice}: "${cleanText}"`;
+    const modeTag = ttsMode === 'neural' ? 'Neural AI' : 'Local OS';
+    const entry = `[${modeTag}] ${selectedVoice} (Pitch: ${ttsPitchFactor}x): "${cleanText}"`;
     setTtsQueue(prev => [...prev, entry]);
-    speakText(cleanText, selectedVoice);
-    socket?.emit('tts_message', { roomName, sender: myAlias.name, text: cleanText, voice: selectedVoice });
+    speakText(cleanText, selectedVoice, ttsMode, ttsPitchFactor);
+    socket?.emit('tts_message', { 
+      roomName, 
+      sender: myAlias.name, 
+      text: cleanText, 
+      voice: selectedVoice,
+      mode: ttsMode,
+      pitchFactor: ttsPitchFactor
+    });
     setTtsText('');
     showToast('TTS sent to peers', 'info');
   };
@@ -4557,26 +4916,61 @@ export default function App() {
                         </div>
 
                         <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2.5 pb-3">
+                          {/* DM Cryptographic Lock Banner */}
+                          <div className="p-3 rounded-2xl flex items-center justify-between gap-3 text-left bg-slate-900/60 border border-[var(--nx-primary)]/10 backdrop-blur-md mb-2">
+                            <div className="flex items-center gap-2">
+                              <Lock className={`w-3.5 h-3.5 ${dmCryptoKeys[activeChatContact.username] ? 'text-emerald-400' : 'text-slate-500 animate-pulse'}`} />
+                              <div>
+                                <p className="text-[10px] font-bold text-slate-300">Direct Message Cryptographic Lock</p>
+                                <p className="text-[8px] text-slate-500 mt-0.5">
+                                  {dmCryptoKeys[activeChatContact.username] ? 'AES-256 E2E Active (Passphrase Derivation Protected)' : 'Standard Relay (Server readable)'}
+                                </p>
+                              </div>
+                            </div>
+                            <input
+                              type="password"
+                              value={dmSecrets[activeChatContact.username] || ''}
+                              onChange={e => handleSetDmSecret(activeChatContact.username, e.target.value)}
+                              placeholder="DM Secret Passphrase"
+                              className="w-40 nx-input text-[10px] py-1 bg-slate-950/80 border-white/5"
+                            />
+                          </div>
                           {/* Pending file requests from this user */}
                           {pendingFiles.filter(f => f.sender.toLowerCase() === activeChatContact.username.toLowerCase()).map(f => {
                             const isStale = f.created_at && (Date.now() - new Date(f.created_at).getTime() > 10 * 60 * 1000);
+                            const keyEntry = Object.entries(dmCryptoKeys).find(
+                              ([k]) => k.toLowerCase() === f.sender.toLowerCase()
+                            );
+                            const isEncrypted = !!keyEntry;
                             return (
                             <div 
                               key={f.id}
-                              className="p-3.5 rounded-2xl border border-[var(--nx-primary)]/20 mb-3 flex flex-col gap-3 text-left"
+                              className="p-3.5 rounded-2xl border mb-3 flex flex-col gap-3 text-left transition-all hover:scale-[1.01]"
                               style={{
                                 background: 'linear-gradient(145deg, rgba(44, 37, 35, 0.95) 0%, rgba(28, 22, 20, 0.98) 100%)',
+                                borderColor: isEncrypted ? 'rgba(16, 185, 129, 0.3)' : 'rgba(255, 212, 172, 0.2)',
                                 boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
                               }}
                             >
                               <div className="flex items-center gap-3">
-                                <div className="p-2.5 bg-indigo-500/10 rounded-xl border border-indigo-500/20 text-lg">
-                                  📁
+                                <div className={`p-2.5 rounded-xl border text-lg flex items-center justify-center ${
+                                  isEncrypted 
+                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                                    : 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400'
+                                }`}>
+                                  {isEncrypted ? '🔒' : '📁'}
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                  <p className="text-2xs font-bold text-white truncate">{f.file_name}</p>
+                                  <div className="flex items-center gap-1.5">
+                                    <p className="text-2xs font-bold text-white truncate">{f.file_name}</p>
+                                    {isEncrypted && (
+                                      <span className="text-[8px] text-emerald-400 font-medium px-1 py-0.25 bg-emerald-500/10 rounded-md border border-emerald-500/20">
+                                        E2EE
+                                      </span>
+                                    )}
+                                  </div>
                                   <p className="text-[10px]" style={{ color: 'rgba(255, 212, 172, 0.6)' }}>
-                                    Incoming Secure File · {(f.file_size / (1024*1024)).toFixed(2)} MB
+                                    {isEncrypted ? 'Incoming Secure E2EE File' : 'Incoming Secure File'} · {(f.file_size / (1024*1024)).toFixed(2)} MB
                                   </p>
                                 </div>
                               </div>
@@ -4654,7 +5048,21 @@ export default function App() {
                                   ) : (
                                     <>
                                       <div className="bubble flex items-start justify-between gap-3">
-                                        <span>{m.text}</span>
+                                        <span>
+                                          {m.decryptedText ? (
+                                            <span className="flex items-center gap-1.5 text-indigo-200">
+                                              <Lock className="w-3 h-3 text-indigo-400 flex-shrink-0" />
+                                              {m.decryptedText}
+                                            </span>
+                                          ) : m.text.startsWith('[E2EE]:') ? (
+                                            <span className="flex items-center gap-1.5 text-rose-300 font-medium">
+                                              <ShieldAlert className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                                              🔒 Encrypted Message
+                                            </span>
+                                          ) : (
+                                            m.text
+                                          )}
+                                        </span>
                                         {m.self && !isSending && (
                                           <div className="opacity-0 group-hover:opacity-100 transition-all duration-200 flex gap-1.5 self-center ml-2 bg-slate-950/60 p-1 rounded-lg backdrop-blur-sm">
                                             <button 
@@ -4694,11 +5102,12 @@ export default function App() {
                         {/* File Transfer Progress Card */}
                         {fileTransferProgress && fileTransferProgress.status !== 'idle' && (
                           <div 
-                            className="p-3.5 rounded-2xl border mb-3 flex flex-col gap-2 text-left"
+                            className="p-3.5 rounded-2xl border mb-3 flex flex-col gap-2 text-left transition-all duration-300"
                             style={{
                               background: 'rgba(44, 37, 35, 0.95)',
                               borderColor: fileTransferProgress.status === 'completed' ? 'rgba(16, 185, 129, 0.3)' :
-                                           fileTransferProgress.status === 'failed' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(255, 212, 172, 0.2)',
+                                           fileTransferProgress.status === 'failed' ? 'rgba(239, 68, 68, 0.3)' :
+                                           fileTransferProgress.isEncrypted ? 'rgba(16, 185, 129, 0.25)' : 'rgba(255, 212, 172, 0.2)',
                               boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
                             }}
                           >
@@ -4710,8 +5119,13 @@ export default function App() {
                                 </span>
                                 <div>
                                   <p className="text-2xs font-bold text-white truncate max-w-xs">{fileTransferProgress.fileName}</p>
-                                  <p className="text-[10px] text-slate-400 mt-0.5">
+                                  <p className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1.5">
                                     {(fileTransferProgress.fileSize / (1024 * 1024)).toFixed(2)} MB · {fileTransferProgress.role === 'sender' ? 'Uploading (P2P)' : 'Downloading (P2P)'}
+                                    {fileTransferProgress.isEncrypted && (
+                                      <span className="text-[8px] text-emerald-400 font-semibold px-1 py-0.25 bg-emerald-500/10 rounded-md border border-emerald-500/20 flex items-center gap-0.5">
+                                        🔒 E2EE Active
+                                      </span>
+                                    )}
                                   </p>
                                 </div>
                               </div>
@@ -4725,7 +5139,8 @@ export default function App() {
                                   className="h-full rounded-full transition-all duration-300"
                                   style={{ 
                                     width: `${fileTransferProgress.progress}%`,
-                                    background: fileTransferProgress.status === 'completed' ? '#10b981' : '#FFD4AC' 
+                                    background: fileTransferProgress.status === 'completed' ? '#10b981' :
+                                                fileTransferProgress.isEncrypted ? '#10b981' : '#FFD4AC' 
                                   }}
                                 />
                               </div>
@@ -5577,33 +5992,141 @@ export default function App() {
                     </div>
 
                     {/* TTS */}
-                    <div>
-                      <p className="nx-section-header mb-3">Synthetic Voice (TTS)</p>
-                      <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)}
-                        className="nx-input text-2xs mb-2" style={{ padding: '8px 12px' }}>
-                        <option>XTTS-v2 Host Male</option>
-                        <option>XTTS-v2 Host Female</option>
-                        <option>Voice Clone 01</option>
-                      </select>
-                      <textarea value={ttsText} onChange={e => setTtsText(e.target.value)}
-                        placeholder="Type synthetic message…"
-                        className="nx-input text-2xs mb-2" rows={3}
-                        style={{ resize: 'none', fontFamily: 'var(--font-sans)' }}
-                        onKeyDown={e => { if (e.ctrlKey && e.key === 'Enter') queueTTS(); }} />
+                    <div className="p-4 rounded-2xl bg-slate-950/40 border border-white/5 space-y-3.5 relative overflow-hidden backdrop-blur-md">
+                      <div className="flex items-center justify-between">
+                        <p className="nx-section-header m-0 flex items-center gap-2">
+                          <Sparkles className="w-3.5 h-3.5 text-teal-400 animate-pulse" />
+                          Synthetic Voice (TTS)
+                        </p>
+                        <span className={`text-[8px] font-extrabold uppercase px-2 py-0.5 rounded-full border tracking-wide font-mono ${
+                          ttsMode === 'neural' 
+                            ? 'bg-teal-500/10 border-teal-500/20 text-teal-400' 
+                            : 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400'
+                        }`}>
+                          {ttsMode === 'neural' ? 'Neural AI' : 'Local OS'}
+                        </span>
+                      </div>
+
+                      {/* Mode Toggle Button Group */}
+                      <div className="flex bg-slate-950/80 p-0.5 rounded-xl border border-white/5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTtsMode('neural');
+                            setSelectedVoice('XTTS-v2 Host Male');
+                          }}
+                          className={`flex-1 py-1.5 rounded-lg text-[10px] font-extrabold transition-all duration-300 ${
+                            ttsMode === 'neural'
+                              ? 'bg-gradient-to-r from-teal-500/20 to-indigo-500/20 border border-indigo-500/30 text-teal-300 shadow-lg'
+                              : 'text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          ✨ Neural AI
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTtsMode('browser');
+                            if (browserVoices.length > 0) {
+                              setSelectedVoice(browserVoices[0].name);
+                            } else {
+                              setSelectedVoice('default');
+                            }
+                          }}
+                          className={`flex-1 py-1.5 rounded-lg text-[10px] font-extrabold transition-all duration-300 ${
+                            ttsMode === 'browser'
+                              ? 'bg-slate-800 border border-white/10 text-white shadow-lg'
+                              : 'text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          🌐 Local Browser
+                        </button>
+                      </div>
+
+                      {/* Informative Help Text */}
+                      <p className="text-[9px] text-slate-500 leading-normal">
+                        {ttsMode === 'neural' 
+                          ? "Generates natural speech via NexaLink's AI Sidecar microservice. Supports advanced neural accents and pitch shifting." 
+                          : "Uses the browser's offline Web Speech API. Supports custom pitch with zero latency."}
+                      </p>
+
+                      {/* Voice Selection Dropdown */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 mb-1.5 block">Voice Model Preset</label>
+                        {ttsMode === 'neural' ? (
+                          <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)}
+                            className="nx-input text-2xs mb-2" style={{ padding: '8px 12px' }}>
+                            <option value="XTTS-v2 Host Male">Coqui Male (Host)</option>
+                            <option value="XTTS-v2 Host Female">Coqui Female (Host)</option>
+                            <option value="alloy">OpenAI Alloy (Sleek)</option>
+                            <option value="echo">OpenAI Echo (Deep)</option>
+                            <option value="fable">OpenAI Fable (Narrator)</option>
+                            <option value="onyx">OpenAI Onyx (Baritone)</option>
+                            <option value="nova">OpenAI Nova (Energetic Female)</option>
+                            <option value="shimmer">OpenAI Shimmer (Corporate Female)</option>
+                          </select>
+                        ) : (
+                          <select value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)}
+                            className="nx-input text-2xs mb-2" style={{ padding: '8px 12px' }}>
+                            {browserVoices.length === 0 ? (
+                              <option value="default">Default OS Voice</option>
+                            ) : (
+                              browserVoices.map(v => (
+                                <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
+                              ))
+                            )}
+                          </select>
+                        )}
+                      </div>
+
+                      {/* Pitch Factor Slider */}
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-[10px] font-bold text-slate-400">Vocal Pitch Multiplier</label>
+                          <span className="text-[10px] font-mono text-teal-400 font-extrabold">{ttsPitchFactor.toFixed(2)}x</span>
+                        </div>
+                        <input 
+                          type="range" 
+                          min="0.5" 
+                          max="2.0" 
+                          step="0.05" 
+                          value={ttsPitchFactor} 
+                          onChange={e => setTtsPitchFactor(parseFloat(e.target.value))}
+                          className="w-full cursor-pointer accent-indigo-500"
+                        />
+                      </div>
+
+                      {/* Text Input area */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 mb-1.5 block">Synthetic Transmission Text</label>
+                        <textarea value={ttsText} onChange={e => setTtsText(e.target.value)}
+                          placeholder="Type synthetic message to broadcast…"
+                          className="nx-input text-2xs" rows={2}
+                          style={{ resize: 'none', fontFamily: 'var(--font-sans)', padding: '10px' }}
+                          onKeyDown={e => { if (e.ctrlKey && e.key === 'Enter') queueTTS(); }} />
+                      </div>
+
                       <button onClick={queueTTS} disabled={!ttsText.trim()}
-                        className="nx-btn nx-btn-primary w-full text-2xs" style={{ padding: '9px' }}>
+                        className="nx-btn nx-btn-primary w-full text-2xs flex items-center justify-center gap-2" style={{ padding: '9px' }}>
                         <Play className="w-3.5 h-3.5" /> Send Synthetic Transmission
                       </button>
+
                       {ttsQueue.length > 0 && (
-                        <div className="mt-3 flex flex-col gap-1.5 max-h-24 overflow-y-auto">
-                          {ttsQueue.map((t, i) => (
-                            <div key={i} className="px-3 py-2 rounded-lg text-3xs font-mono text-slate-400 flex items-center justify-between"
-                              style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                              <span className="truncate">{t}</span>
-                              <button onClick={() => setTtsQueue(q => q.filter((_, j) => j !== i))}
-                                className="ml-2 text-slate-600 hover:text-slate-400 flex-shrink-0"><X className="w-2.5 h-2.5" /></button>
-                            </div>
-                          ))}
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-[9px] font-extrabold uppercase text-slate-500 tracking-wider">Transmission History</span>
+                            <button onClick={() => setTtsQueue([])} className="text-[9px] text-rose-400 hover:text-rose-300 font-semibold transition-colors">Clear</button>
+                          </div>
+                          <div className="flex flex-col gap-1.5 max-h-28 overflow-y-auto">
+                            {ttsQueue.map((t, i) => (
+                              <div key={i} className="px-3 py-2 rounded-xl text-3xs font-mono text-slate-400 flex items-center justify-between transition-all hover:bg-white/[0.04]"
+                                style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                <span className="truncate pr-2">{t}</span>
+                                <button onClick={() => setTtsQueue(q => q.filter((_, j) => j !== i))}
+                                  className="text-slate-600 hover:text-slate-400 transition-colors flex-shrink-0"><X className="w-2.5 h-2.5" /></button>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -5613,6 +6136,26 @@ export default function App() {
                 {/* ── CHAT PANEL ── */}
                 {activeTab === 'chat' && (
                   <div className="flex flex-col h-[calc(100vh-220px)] gap-3">
+                    {/* E2EE Key Input Banner */}
+                    <div className="p-3 rounded-2xl flex items-center justify-between gap-3 text-left bg-slate-900/60 border border-indigo-500/10 backdrop-blur-md">
+                      <div className="flex items-center gap-2">
+                        <Lock className={`w-3.5 h-3.5 ${roomE2eeKey ? 'text-emerald-400' : 'text-slate-500 animate-pulse'}`} />
+                        <div>
+                          <p className="text-[10px] font-bold text-slate-300">Room Cryptographic Lock</p>
+                          <p className="text-[8px] text-slate-500 mt-0.5">
+                            {roomE2eeKey ? 'AES-256 E2E Active (Tunnel Protected)' : 'Standard Relay (Server readable)'}
+                          </p>
+                        </div>
+                      </div>
+                      <input
+                        type="password"
+                        value={roomPassphrase}
+                        onChange={e => handleSetRoomPassphrase(e.target.value)}
+                        placeholder="Room Secret Passphrase"
+                        className="w-40 nx-input text-[10px] py-1 bg-slate-950/80 border-white/5"
+                      />
+                    </div>
+
                     <div className="flex-1 overflow-y-auto pb-2 pr-1 space-y-2.5">
                       {chatMessages.length === 0 ? (
                         <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center">
@@ -5623,7 +6166,21 @@ export default function App() {
                         chatMessages.map(m => (
                           <div key={m.id} className={`chat-bubble ${m.self ? 'self' : 'remote'}`}>
                             <span className="sender">{m.self ? 'You' : m.sender}</span>
-                            <div className="bubble">{m.text}</div>
+                            <div className="bubble">
+                              {m.decryptedText ? (
+                                <span className="flex items-center gap-1.5 text-indigo-200">
+                                  <Lock className="w-3 h-3 text-indigo-400 flex-shrink-0" />
+                                  {m.decryptedText}
+                                </span>
+                              ) : m.text.startsWith('[E2EE]:') ? (
+                                <span className="flex items-center gap-1.5 text-rose-300 font-medium">
+                                  <ShieldAlert className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                                  🔒 Encrypted Message
+                                </span>
+                              ) : (
+                                m.text
+                              )}
+                            </div>
                             <span className="time">{m.time}</span>
                           </div>
                         ))

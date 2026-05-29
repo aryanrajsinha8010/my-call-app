@@ -2,9 +2,21 @@ import React, { useRef, useState, useEffect } from 'react';
 import { 
   Trash2, RotateCcw, RotateCw, Download, PenTool, Eraser, 
   FolderOpen, UploadCloud, Palette, Sliders, CloudLightning,
-  Sparkles, Check, AlertCircle, RefreshCw, Type, Image
+  Sparkles, Check, AlertCircle, RefreshCw, Type, Image,
+  Square, Circle, Minus, ArrowRight
 } from 'lucide-react';
 import { Socket } from 'socket.io-client';
+
+interface ShapeData {
+  type: 'rectangle' | 'circle' | 'line' | 'arrow';
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  color: string;
+  size: number;
+  fill?: boolean;
+}
 
 interface WhiteboardProps {
   socket: Socket | null;
@@ -27,7 +39,8 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState('#dcb16b'); // Start with the premium golden color
   const [brushSize, setBrushSize] = useState(4);
-  const [tool, setTool] = useState<'pen' | 'eraser' | 'text' | 'image'>('pen');
+  const [tool, setTool] = useState<'pen' | 'eraser' | 'text' | 'image' | 'rectangle' | 'circle' | 'line' | 'arrow'>('pen');
+  const [fillShapes, setFillShapes] = useState(false);
   const [annotationText, setAnnotationText] = useState('Annotation');
   const [fontSize, setFontSize] = useState(16);
   const [imageUrl, setImageUrl] = useState('');
@@ -40,6 +53,59 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
   const [history, setHistory] = useState<string[]>([]);
   const [redoStack, setRedoStack] = useState<string[]>([]);
   const lastPos = useRef({ x: 0, y: 0 });
+  const startImageDataRef = useRef<ImageData | null>(null);
+  const currentPos = useRef({ x: 0, y: 0 });
+
+  const drawShapeOnCtx = (
+    ctx: CanvasRenderingContext2D,
+    shapeType: 'rectangle' | 'circle' | 'line' | 'arrow',
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    fill = false
+  ) => {
+    ctx.beginPath();
+    if (shapeType === 'rectangle') {
+      ctx.rect(startX, startY, endX - startX, endY - startY);
+      if (fill) {
+        ctx.fill();
+      } else {
+        ctx.stroke();
+      }
+    } else if (shapeType === 'circle') {
+      const radius = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
+      ctx.arc(startX, startY, radius, 0, 2 * Math.PI);
+      if (fill) {
+        ctx.fill();
+      } else {
+        ctx.stroke();
+      }
+    } else if (shapeType === 'line') {
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+    } else if (shapeType === 'arrow') {
+      const angle = Math.atan2(endY - startY, endX - startX);
+      const arrowLength = 15 + brushSize; // scale arrowhead with brush size
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(
+        endX - arrowLength * Math.cos(angle - Math.PI / 6),
+        endY - arrowLength * Math.sin(angle - Math.PI / 6)
+      );
+      ctx.lineTo(
+        endX - arrowLength * Math.cos(angle + Math.PI / 6),
+        endY - arrowLength * Math.sin(angle + Math.PI / 6)
+      );
+      ctx.closePath();
+      ctx.fill();
+    }
+  };
 
   // Cloud Whiteboard Storage States
   const [cloudSnapshots, setCloudSnapshots] = useState<{ id: string; url: string; saved_by: string; created_at: string }[]>([]);
@@ -381,6 +447,17 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
       }
       return;
     }
+
+    if (['rectangle', 'circle', 'line', 'arrow'].includes(tool)) {
+      const ctx = getCanvasContext();
+      if (ctx) {
+        startImageDataRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      }
+      lastPos.current = { x, y };
+      currentPos.current = { x, y };
+      setIsDrawing(true);
+      return;
+    }
     
     lastPos.current = { x, y };
     setIsDrawing(true);
@@ -397,6 +474,29 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
     const scaleY = canvas.height / rect.height;
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
+
+    currentPos.current = { x, y };
+
+    if (['rectangle', 'circle', 'line', 'arrow'].includes(tool)) {
+      if (startImageDataRef.current) {
+        ctx.putImageData(startImageDataRef.current, 0, 0);
+        ctx.lineWidth = brushSize;
+        ctx.strokeStyle = convertPeachToGold(color);
+        ctx.fillStyle = convertPeachToGold(color);
+        ctx.lineCap = 'round';
+        
+        drawShapeOnCtx(
+          ctx,
+          tool as 'rectangle' | 'circle' | 'line' | 'arrow',
+          lastPos.current.x,
+          lastPos.current.y,
+          x,
+          y,
+          fillShapes
+        );
+      }
+      return;
+    }
 
     ctx.beginPath();
     ctx.moveTo(lastPos.current.x, lastPos.current.y);
@@ -430,8 +530,40 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
     lastPos.current = { x, y };
   };
 
-  const handleStopDraw = () => {
+  const handleStopDraw = (e?: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawing) return;
     setIsDrawing(false);
+
+    if (['rectangle', 'circle', 'line', 'arrow'].includes(tool)) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = e ? (e.clientX - rect.left) * scaleX : currentPos.current.x;
+      const y = e ? (e.clientY - rect.top) * scaleY : currentPos.current.y;
+      
+      const startX = lastPos.current.x;
+      const startY = lastPos.current.y;
+
+      // Broadcast shape event to peers
+      if (socket) {
+        const shapeData = {
+          type: tool,
+          startX,
+          startY,
+          endX: x,
+          endY: y,
+          color: convertPeachToGold(color),
+          size: brushSize,
+          fill: fillShapes
+        };
+        socket.emit('shape_event', { roomName, shapeData });
+      }
+    }
+    
+    startImageDataRef.current = null;
   };
 
   // Undo action
@@ -552,12 +684,36 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
       };
     });
 
+    socket.on('remote_shape', (shapeData: ShapeData) => {
+      const canvas = canvasRef.current;
+      const ctx = getCanvasContext();
+      if (!canvas || !ctx) return;
+
+      saveState();
+      
+      ctx.lineWidth = shapeData.size;
+      ctx.strokeStyle = convertPeachToGold(shapeData.color);
+      ctx.fillStyle = convertPeachToGold(shapeData.color);
+      ctx.lineCap = 'round';
+
+      drawShapeOnCtx(
+        ctx,
+        shapeData.type,
+        shapeData.startX,
+        shapeData.startY,
+        shapeData.endX,
+        shapeData.endY,
+        shapeData.fill
+      );
+    });
+
     return () => {
       socket.off('remote_draw');
       socket.off('remote_clear');
       socket.off('remote_load');
       socket.off('remote_text');
       socket.off('remote_image');
+      socket.off('remote_shape');
     };
   }, [socket]);
 
@@ -581,7 +737,7 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
         
         {/* Draw Tools Selection */}
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex bg-slate-900/60 p-1 rounded-xl border border-white/5">
+          <div className="flex bg-slate-900/60 p-1 rounded-xl border border-white/5 flex-wrap gap-0.5">
             <button 
               type="button"
               onClick={() => setTool('pen')}
@@ -619,6 +775,58 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
               title="Text Annotation Tool"
             >
               <Type className="w-4 h-4" />
+            </button>
+
+            <button 
+              type="button"
+              onClick={() => setTool('rectangle')}
+              className={`p-2 rounded-lg transition-all duration-200 ${
+                tool === 'rectangle' 
+                  ? 'bg-gradient-to-tr from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/20' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              }`}
+              title="Rectangle Tool"
+            >
+              <Square className="w-4 h-4" />
+            </button>
+
+            <button 
+              type="button"
+              onClick={() => setTool('circle')}
+              className={`p-2 rounded-lg transition-all duration-200 ${
+                tool === 'circle' 
+                  ? 'bg-gradient-to-tr from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/20' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              }`}
+              title="Circle Tool"
+            >
+              <Circle className="w-4 h-4" />
+            </button>
+
+            <button 
+              type="button"
+              onClick={() => setTool('line')}
+              className={`p-2 rounded-lg transition-all duration-200 ${
+                tool === 'line' 
+                  ? 'bg-gradient-to-tr from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/20' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              }`}
+              title="Line Tool"
+            >
+              <Minus className="w-4 h-4" />
+            </button>
+
+            <button 
+              type="button"
+              onClick={() => setTool('arrow')}
+              className={`p-2 rounded-lg transition-all duration-200 ${
+                tool === 'arrow' 
+                  ? 'bg-gradient-to-tr from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/20' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              }`}
+              title="Arrow Tool"
+            >
+              <ArrowRight className="w-4 h-4" />
             </button>
 
             <button 
@@ -901,6 +1109,30 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
             />
             <span className="text-2xs text-slate-500">px</span>
           </div>
+        </div>
+      )}
+
+      {/* Shape Tool Settings Drawer */}
+      {(tool === 'rectangle' || tool === 'circle' || tool === 'line' || tool === 'arrow') && (
+        <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-white/5 flex flex-wrap items-center gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
+          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Shape Options:</span>
+          {(tool === 'rectangle' || tool === 'circle') && (
+            <button
+              type="button"
+              onClick={() => setFillShapes(!fillShapes)}
+              className={`nx-btn text-2xs py-1.5 px-3 flex items-center gap-1.5 transition-all duration-200 ${
+                fillShapes 
+                  ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 shadow-md shadow-indigo-500/15' 
+                  : 'bg-slate-900/80 border-white/10 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>{fillShapes ? 'Filled Shape' : 'Outline Only'}</span>
+            </button>
+          )}
+          <span className="text-2xs text-slate-500 font-mono text-slate-400">
+            Click and drag on the canvas to draw a {tool}.
+          </span>
         </div>
       )}
 
