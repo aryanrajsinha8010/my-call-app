@@ -28,6 +28,7 @@ interface ChatMessage {
   text: string;
   time: string;
   self: boolean;
+  status?: 'sending' | 'delivered';
 }
 
 type Tab = 'chat' | 'audio' | 'whiteboard' | 'control' | 'participants' | 'profile' | 'contacts';
@@ -560,142 +561,100 @@ export default function App() {
     sessionStorage.setItem('nexalink_notifications', JSON.stringify(inboxNotifications));
   }, [inboxNotifications]);
 
-  const sendLobbyChat = async () => {
+  const sendLobbyChat = () => {
     if (!activeChatContact || !lobbyChatInput.trim()) return;
+    if (!socket) {
+      showToast("Chat server is unavailable.", "error");
+      return;
+    }
     const msgText = lobbyChatInput.trim();
+    const clientMsgId = `client-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     
-    try {
-      const token = sessionStorage.getItem('nexalink_token') || authToken;
-      const res = await fetch(`${API}/api/dm/send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ recipient: activeChatContact.username, text: msgText })
-      });
-      if (!res.ok) {
-        throw new Error("Failed to persist message");
-      }
-      
-      const sentMsg = await res.json();
-      
-      const msg: ChatMessage = {
-        id: String(sentMsg.message.id),
-        sender: profile.username || userName,
-        text: msgText,
-        time: nowTime(),
-        self: true
+    const msg: ChatMessage = {
+      id: clientMsgId,
+      sender: profile.username || userName,
+      text: msgText,
+      time: nowTime(),
+      self: true,
+      status: 'sending' as const
+    };
+    
+    setLobbyChats(prev => {
+      const chatHistory = prev[activeChatContact.username] || [];
+      return {
+        ...prev,
+        [activeChatContact.username]: [...chatHistory, msg]
       };
-      
-      setLobbyChats(prev => {
-        const chatHistory = prev[activeChatContact.username] || [];
-        return {
-          ...prev,
-          [activeChatContact.username]: [...chatHistory, msg]
-        };
-      });
-      
-      if (socket) {
-        socket.emit('direct_message', {
-          targetUsername: activeChatContact.username,
-          senderUsername: userName,
-          senderName: profile.username || userName,
-          text: msgText,
-          time: msg.time,
-          messageId: msg.id
-        });
-      }
-      
-      setLobbyChatInput('');
-    } catch (err) {
-      console.error("Failed to send lobby message:", err);
-      showToast("Failed to deliver message.", "error");
-    }
+    });
+    
+    socket.emit('direct_message', {
+      targetUsername: activeChatContact.username,
+      senderUsername: userName,
+      senderName: profile.username || userName,
+      text: msgText,
+      clientMsgId
+    });
+    
+    setLobbyChatInput('');
   };
 
-  const saveMessageEdit = async (messageId: string, contactUsername: string) => {
+  const saveMessageEdit = (messageId: string, contactUsername: string) => {
     if (!editingText.trim()) return;
-    try {
-      const token = sessionStorage.getItem('nexalink_token') || authToken;
-      const res = await fetch(`${API}/api/dm/edit/${messageId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ text: editingText.trim() })
-      });
-      if (res.ok) {
-        setLobbyChats(prev => {
-          const chatHistory = prev[contactUsername] || [];
-          const updatedHistory = chatHistory.map(m => {
-            if (m.id === messageId) {
-              return { ...m, text: editingText.trim() };
-            }
-            return m;
-          });
-          return {
-            ...prev,
-            [contactUsername]: updatedHistory
-          };
-        });
-        
-        if (socket) {
-          socket.emit('direct_message_edit', {
-            targetUsername: contactUsername,
-            messageId,
-            text: editingText.trim(),
-            senderUsername: userName
-          });
-        }
-        
-        setEditingMessageId(null);
-        setEditingText('');
-        showToast("Message updated.", "success");
-      } else {
-        throw new Error("Failed to edit message");
-      }
-    } catch (err) {
-      console.error(err);
-      showToast("Failed to edit message.", "error");
+    if (!socket) {
+      showToast("Chat server is unavailable.", "error");
+      return;
     }
+    const editedText = editingText.trim();
+    
+    setLobbyChats(prev => {
+      const chatHistory = prev[contactUsername] || [];
+      const updatedHistory = chatHistory.map(m => {
+        if (m.id === messageId) {
+          return { ...m, text: editedText };
+        }
+        return m;
+      });
+      return {
+        ...prev,
+        [contactUsername]: updatedHistory
+      };
+    });
+    
+    socket.emit('direct_message_edit', {
+      targetUsername: contactUsername,
+      messageId,
+      text: editedText,
+      senderUsername: userName
+    });
+    
+    setEditingMessageId(null);
+    setEditingText('');
+    showToast("Message updated.", "success");
   };
 
-  const deleteMessage = async (messageId: string, contactUsername: string) => {
+  const deleteMessage = (messageId: string, contactUsername: string) => {
     if (!window.confirm("Are you sure you want to delete this message?")) return;
-    try {
-      const token = sessionStorage.getItem('nexalink_token') || authToken;
-      const res = await fetch(`${API}/api/dm/delete/${messageId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        setLobbyChats(prev => {
-          const chatHistory = prev[contactUsername] || [];
-          const updatedHistory = chatHistory.filter(m => m.id !== messageId);
-          return {
-            ...prev,
-            [contactUsername]: updatedHistory
-          };
-        });
-        
-        if (socket) {
-          socket.emit('direct_message_delete', {
-            targetUsername: contactUsername,
-            messageId,
-            senderUsername: userName
-          });
-        }
-        
-        showToast("Message deleted.", "success");
-      } else {
-        throw new Error("Failed to delete message");
-      }
-    } catch (err) {
-      console.error(err);
-      showToast("Failed to delete message.", "error");
+    if (!socket) {
+      showToast("Chat server is unavailable.", "error");
+      return;
     }
+    
+    setLobbyChats(prev => {
+      const chatHistory = prev[contactUsername] || [];
+      const updatedHistory = chatHistory.filter(m => m.id !== messageId);
+      return {
+        ...prev,
+        [contactUsername]: updatedHistory
+      };
+    });
+    
+    socket.emit('direct_message_delete', {
+      targetUsername: contactUsername,
+      messageId,
+      senderUsername: userName
+    });
+    
+    showToast("Message deleted.", "success");
   };
 
   const clearAllCallHistory = async () => {
@@ -2267,6 +2226,28 @@ export default function App() {
       });
     };
 
+    const handleDirectMessageDelivered = (data: { clientMsgId: string; messageId: string; sent_at: string; targetUsername: string }) => {
+      const { clientMsgId, messageId, sent_at, targetUsername } = data;
+      setLobbyChats(prev => {
+        const chatHistory = prev[targetUsername] || [];
+        const updatedHistory = chatHistory.map(m => {
+          if (m.id === clientMsgId) {
+            return {
+              ...m,
+              id: messageId,
+              time: sent_at,
+              status: 'delivered' as const
+            };
+          }
+          return m;
+        });
+        return {
+          ...prev,
+          [targetUsername]: updatedHistory
+        };
+      });
+    };
+
     const handleContactAddedNotification = (data: { addedBy: string }) => {
       showToast(`${data.addedBy} added you as a contact!`, 'success');
       loadContactsFromServer();
@@ -2428,6 +2409,7 @@ export default function App() {
     socket.on('call_cancelled', handleCallCancelled);
     socket.on('call_response', handleCallResponseEvent);
     socket.on('direct_message', handleDirectMessage);
+    socket.on('direct_message_delivered', handleDirectMessageDelivered);
     socket.on('direct_message_edit', handleDirectMessageEdit);
     socket.on('direct_message_delete', handleDirectMessageDelete);
     socket.on('contact_added_notification', handleContactAddedNotification);
@@ -2443,6 +2425,7 @@ export default function App() {
       socket.off('call_cancelled', handleCallCancelled);
       socket.off('call_response', handleCallResponseEvent);
       socket.off('direct_message', handleDirectMessage);
+      socket.off('direct_message_delivered', handleDirectMessageDelivered);
       socket.off('direct_message_edit', handleDirectMessageEdit);
       socket.off('direct_message_delete', handleDirectMessageDelete);
       socket.off('contact_added_notification', handleContactAddedNotification);
@@ -4829,8 +4812,13 @@ export default function App() {
                           ) : (
                             (lobbyChats[activeChatContact.username] || []).map(m => {
                               const isEditing = editingMessageId === m.id;
+                              const isSending = m.self && m.status === 'sending';
                               return (
-                                <div key={m.id} className={`chat-bubble ${m.self ? 'self' : 'remote'} group relative`}>
+                                <div 
+                                  key={m.id} 
+                                  className={`chat-bubble ${m.self ? 'self' : 'remote'} group relative`}
+                                  style={isSending ? { opacity: 0.6, transition: 'opacity 0.3s ease' } : { transition: 'opacity 0.3s ease' }}
+                                >
                                   <span className="sender">{m.self ? 'You' : m.sender}</span>
                                   
                                   {isEditing ? (
@@ -4865,7 +4853,7 @@ export default function App() {
                                     <>
                                       <div className="bubble flex items-start justify-between gap-3">
                                         <span>{m.text}</span>
-                                        {m.self && (
+                                        {m.self && !isSending && (
                                           <div className="opacity-0 group-hover:opacity-100 transition-all duration-200 flex gap-1.5 self-center ml-2 bg-slate-950/60 p-1 rounded-lg backdrop-blur-sm">
                                             <button 
                                               onClick={() => {
@@ -4887,7 +4875,12 @@ export default function App() {
                                           </div>
                                         )}
                                       </div>
-                                      <span className="time">{m.time}</span>
+                                      <div className="flex items-center justify-end gap-1 mt-0.5">
+                                        <span className="time">{isSending ? 'sending...' : m.time}</span>
+                                        {isSending && (
+                                          <span className="text-[9px] animate-pulse text-slate-400">⚡</span>
+                                        )}
+                                      </div>
                                     </>
                                   )}
                                 </div>

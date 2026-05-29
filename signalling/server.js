@@ -41,16 +41,50 @@ const PUSH_SUBS_FILE = path.join(__dirname, '.push_subscriptions.json');
 let pushSubscriptions = {};   // { username: PushSubscription }
 
 /** Load push subscriptions from persistent JSON file on startup */
-function loadPushSubscriptions() {
+function loadPushSubscriptionsFromFile() {
   try {
     if (fs.existsSync(PUSH_SUBS_FILE)) {
       const raw = fs.readFileSync(PUSH_SUBS_FILE, 'utf-8');
       pushSubscriptions = JSON.parse(raw);
-      console.log(`[WebPush] Loaded ${Object.keys(pushSubscriptions).length} persisted push subscription(s)`);
+      console.log(`[WebPush] Loaded ${Object.keys(pushSubscriptions).length} persisted push subscription(s) from local file`);
     }
   } catch (err) {
-    console.warn('[WebPush] Failed to load persisted subscriptions:', err.message);
+    console.warn('[WebPush] Failed to load persisted subscriptions from local file:', err.message);
     pushSubscriptions = {};
+  }
+}
+
+/** Load push subscriptions from Supabase database on startup */
+async function loadPushSubscriptionsFromDb() {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+    console.warn('[WebPush] Supabase credentials missing — cannot load subscriptions from DB');
+    loadPushSubscriptionsFromFile();
+    return;
+  }
+  const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/push_subscriptions?select=username,subscription,endpoint`;
+  const headers = {
+    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
+    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`
+  };
+  try {
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      throw new Error(`HTTP status ${res.status}`);
+    }
+    const rows = await res.json();
+    const newSubs = {};
+    for (const row of rows) {
+      const key = row.username.toLowerCase();
+      if (!newSubs[key]) {
+        newSubs[key] = [];
+      }
+      newSubs[key].push(row.subscription);
+    }
+    pushSubscriptions = newSubs;
+    console.log(`[WebPush] Successfully loaded ${rows.length} active subscription(s) for ${Object.keys(pushSubscriptions).length} user(s) from Supabase DB ✔`);
+  } catch (err) {
+    console.warn('[WebPush] Failed to load subscriptions from Supabase DB, falling back to local file:', err.message);
+    loadPushSubscriptionsFromFile();
   }
 }
 
@@ -63,8 +97,186 @@ function savePushSubscriptions() {
   }
 }
 
+/** Save a push subscription to Supabase DB asynchronously */
+async function savePushSubscriptionToDb(username, subscription) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) return;
+  const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/push_subscriptions`;
+  const headers = {
+    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
+    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'resolution=merge-duplicates'
+  };
+  const payload = {
+    username: username.trim().toLowerCase(),
+    subscription: subscription,
+    endpoint: subscription.endpoint,
+    created_at: new Date().toISOString()
+  };
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      console.warn(`[WebPush] Failed to save push subscription to DB (status: ${res.status})`);
+    } else {
+      console.log(`[WebPush] Persisted subscription to DB for <${username}>`);
+    }
+  } catch (err) {
+    console.error('[WebPush] Failed to save subscription to DB:', err.message);
+  }
+}
+
+/** Delete a specific push subscription endpoint from Supabase DB asynchronously */
+async function deletePushSubscriptionFromDb(endpoint) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY || !endpoint) return;
+  const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`;
+  const headers = {
+    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
+    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`
+  };
+  try {
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers
+    });
+    if (!res.ok) {
+      console.warn(`[WebPush] Failed to delete push subscription from DB (status: ${res.status})`);
+    } else {
+      console.log(`[WebPush] Cleaned up/deleted push subscription from DB`);
+    }
+  } catch (err) {
+    console.error('[WebPush] Failed to delete subscription from DB:', err.message);
+  }
+}
+
+/** Delete all push subscriptions for a user from Supabase DB asynchronously */
+async function deleteUserPushSubscriptionsFromDb(username) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY || !username) return;
+  const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/push_subscriptions?username=eq.${encodeURIComponent(username.trim().toLowerCase())}`;
+  const headers = {
+    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
+    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`
+  };
+  try {
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers
+    });
+    if (!res.ok) {
+      console.warn(`[WebPush] Failed to delete user push subscriptions from DB (status: ${res.status})`);
+    } else {
+      console.log(`[WebPush] Unsubscribed/deleted all push subscriptions from DB for <${username}>`);
+    }
+  } catch (err) {
+    console.error('[WebPush] Failed to delete user subscriptions from DB:', err.message);
+  }
+}
+
+/** Helper: Deterministic sorted conversation key for userA and userB */
+function getConvoKey(userA, userB) {
+  return [userA.toLowerCase().trim(), userB.toLowerCase().trim()].sort().join('|');
+}
+
+/** Save a direct message to Supabase DB asynchronously */
+async function saveDirectMessageToDb(sender, recipient, text) {
+  const sent_at = new Date().toISOString();
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+    console.warn('[DB] Supabase credentials missing — cannot persist direct message to DB');
+    return { id: Math.floor(Math.random() * 1000000), sent_at };
+  }
+  const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/direct_messages`;
+  const headers = {
+    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
+    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation'
+  };
+  const payload = {
+    conversation_key: getConvoKey(sender, recipient),
+    sender,
+    recipient,
+    text: text.substring(0, 4000),
+    sent_at,
+    read: false
+  };
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const errMsg = await res.text();
+      console.warn(`[DB] Failed to save direct message to DB (status: ${res.status}): ${errMsg}`);
+      return { id: Math.floor(Math.random() * 1000000), sent_at };
+    }
+    const data = await res.json();
+    return data[0] || { id: Math.floor(Math.random() * 1000000), sent_at };
+  } catch (err) {
+    console.error('[DB] Failed to save direct message to DB:', err.message);
+    return { id: Math.floor(Math.random() * 1000000), sent_at };
+  }
+}
+
+/** Edit an existing direct message in Supabase DB asynchronously */
+async function editDirectMessageInDb(messageId, sender, text) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY || !messageId) return false;
+  const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/direct_messages?id=eq.${messageId}&sender=eq.${encodeURIComponent(sender)}`;
+  const headers = {
+    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
+    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`,
+    'Content-Type': 'application/json'
+  };
+  const payload = {
+    text: text.substring(0, 4000)
+  };
+  try {
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      console.warn(`[DB] Failed to edit direct message in DB (status: ${res.status})`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('[DB] Failed to edit direct message in DB:', err.message);
+    return false;
+  }
+}
+
+/** Delete a specific direct message from Supabase DB asynchronously */
+async function deleteDirectMessageInDb(messageId, sender) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY || !messageId) return false;
+  const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/direct_messages?id=eq.${messageId}&sender=eq.${encodeURIComponent(sender)}`;
+  const headers = {
+    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
+    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`
+  };
+  try {
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers
+    });
+    if (!res.ok) {
+      console.warn(`[DB] Failed to delete direct message from DB (status: ${res.status})`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('[DB] Failed to delete direct message from DB:', err.message);
+    return false;
+  }
+}
+
 // Load on startup
-loadPushSubscriptions();
+loadPushSubscriptionsFromDb();
+
 
 /**
  * Send a Web Push notification to a user who may be offline.
@@ -186,6 +398,10 @@ async function sendPush(targetUsername, payload) {
       delete pushSubscriptions[key];
     }
     savePushSubscriptions();
+    // Also clean up from Supabase DB asynchronously
+    for (const endpt of expiredEndpoints) {
+      deletePushSubscriptionFromDb(endpt).catch(() => {});
+    }
     console.log(`[WebPush] Cleaned up ${expiredEndpoints.length} expired subscription(s) for <${targetUsername}>`);
   }
 
@@ -240,11 +456,18 @@ app.post('/api/push/subscribe', (req, res) => {
     // Limit to max 5 sessions to prevent stale array leaks
     if (pushSubscriptions[key].length > 5) {
       const excess = pushSubscriptions[key].length - 5;
-      pushSubscriptions[key].splice(0, excess);
+      const removed = pushSubscriptions[key].splice(0, excess);
+      // Clean up excess endpoints from Supabase DB too
+      for (const rem of removed) {
+        deletePushSubscriptionFromDb(rem.endpoint).catch(() => {});
+      }
     }
   }
 
   savePushSubscriptions();
+  // Persist to Supabase DB asynchronously
+  savePushSubscriptionToDb(username, subscription).catch(() => {});
+
   console.log(`[WebPush] Subscription saved for <${key}>. Active endpoints: ${pushSubscriptions[key].length}`);
   res.json({ ok: true });
 });
@@ -268,12 +491,19 @@ app.delete('/api/push/subscribe', (req, res) => {
       } else if (pushSubscriptions[key].endpoint === subscription.endpoint) {
         delete pushSubscriptions[key];
       }
+      // Delete from Supabase DB asynchronously
+      deletePushSubscriptionFromDb(subscription.endpoint).catch(() => {});
     } else {
       // Complete unsubscribe/signout of all devices
       delete pushSubscriptions[key];
+      // Delete all from Supabase DB asynchronously
+      deleteUserPushSubscriptionsFromDb(username).catch(() => {});
     }
     savePushSubscriptions();
     console.log(`[WebPush] Unsubscribed active session for <${key}>`);
+  } else if (subscription?.endpoint) {
+    // If subscription isn't in memory, still make sure it's deleted from the DB
+    deletePushSubscriptionFromDb(subscription.endpoint).catch(() => {});
   }
   res.json({ ok: true });
 });
@@ -781,17 +1011,40 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('direct_message', ({ targetUsername, senderUsername, senderName, text, time, messageId }) => {
+  socket.on('direct_message', async ({ targetUsername, senderUsername, senderName, text, clientMsgId }) => {
     if (typeof targetUsername !== 'string' || typeof text !== 'string' || !text.trim()) return;
-    const key = targetUsername.trim().toLowerCase();
+
+    const sender = socket.data.user?.username || senderUsername || registeredUsername || 'Peer';
+    const recipient = targetUsername.trim();
+    const key = recipient.toLowerCase();
+
+    // 1. Asynchronously save direct message to database
+    const dbMsg = await saveDirectMessageToDb(sender, recipient, text);
+    const finalMessageId = String(dbMsg.id);
+    const finalSentAt = dbMsg.sent_at;
+
+    // 2. Confirm delivery back to sender with client-side mapping
+    socket.emit('direct_message_delivered', {
+      clientMsgId,
+      messageId: finalMessageId,
+      sent_at: finalSentAt,
+      targetUsername: recipient
+    });
+
+    // 3. Route to target if online, otherwise send Web Push
     const targetSocketId = onlineUsers[key];
-    
     if (targetSocketId) {
-      io.to(targetSocketId).emit('direct_message', { senderUsername, senderName, text, time, messageId });
-      console.log(`[Presence] Direct message routed to ${targetUsername}`);
+      io.to(targetSocketId).emit('direct_message', {
+        senderUsername: sender,
+        senderName: senderName || sender,
+        text,
+        time: finalSentAt,
+        messageId: finalMessageId
+      });
+      console.log(`[Presence] Direct message routed to ${targetUsername} with ID: ${finalMessageId}`);
     } else {
-      // Offline — send Web Push with the actual message preview
-      const displaySender = senderName || senderUsername || 'Peer';
+      // Offline — send Web Push with actual message preview
+      const displaySender = senderName || sender || 'Peer';
       sendPush(key, {
         type: 'chat',
         sender: displaySender,
@@ -800,23 +1053,35 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('direct_message_edit', ({ targetUsername, messageId, text, senderUsername }) => {
-    if (typeof targetUsername !== 'string') return;
+  socket.on('direct_message_edit', async ({ targetUsername, messageId, text, senderUsername }) => {
+    if (typeof targetUsername !== 'string' || !messageId) return;
+    const sender = socket.data.user?.username || senderUsername || registeredUsername || 'Peer';
     const key = targetUsername.trim().toLowerCase();
+
+    // 1. Asynchronously update direct message in database
+    await editDirectMessageInDb(messageId, sender, text);
+
+    // 2. Relay the edit to recipient if online
     const targetSocketId = onlineUsers[key];
     if (targetSocketId) {
-      io.to(targetSocketId).emit('direct_message_edit', { messageId, text, senderUsername });
-      console.log(`[Presence] Message edit relayed to ${targetUsername}`);
+      io.to(targetSocketId).emit('direct_message_edit', { messageId, text, senderUsername: sender });
+      console.log(`[Presence] Message edit relayed to ${targetUsername} for message ID: ${messageId}`);
     }
   });
 
-  socket.on('direct_message_delete', ({ targetUsername, messageId, senderUsername }) => {
-    if (typeof targetUsername !== 'string') return;
+  socket.on('direct_message_delete', async ({ targetUsername, messageId, senderUsername }) => {
+    if (typeof targetUsername !== 'string' || !messageId) return;
+    const sender = socket.data.user?.username || senderUsername || registeredUsername || 'Peer';
     const key = targetUsername.trim().toLowerCase();
+
+    // 1. Asynchronously delete direct message from database
+    await deleteDirectMessageInDb(messageId, sender);
+
+    // 2. Relay the deletion to recipient if online
     const targetSocketId = onlineUsers[key];
     if (targetSocketId) {
-      io.to(targetSocketId).emit('direct_message_delete', { messageId, senderUsername });
-      console.log(`[Presence] Message delete relayed to ${targetUsername}`);
+      io.to(targetSocketId).emit('direct_message_delete', { messageId, senderUsername: sender });
+      console.log(`[Presence] Message delete relayed to ${targetUsername} for message ID: ${messageId}`);
     }
   });
 

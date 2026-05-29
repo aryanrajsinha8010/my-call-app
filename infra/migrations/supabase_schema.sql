@@ -228,3 +228,20 @@ DROP POLICY IF EXISTS "Allow notification logs access" ON public.notification_lo
 CREATE POLICY "Allow notification logs access" ON public.notification_logs FOR ALL USING (true);
 
 
+-- 12. Push Subscriptions Persistence Table
+CREATE TABLE IF NOT EXISTS public.push_subscriptions (
+    id BIGSERIAL PRIMARY KEY,
+    username VARCHAR(50) NOT NULL,
+    subscription JSONB NOT NULL,
+    endpoint TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_username ON public.push_subscriptions(username);
+
+ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow push subscriptions access" ON public.push_subscriptions;
+CREATE POLICY "Allow push subscriptions access" ON public.push_subscriptions FOR ALL USING (true);
+
+
+

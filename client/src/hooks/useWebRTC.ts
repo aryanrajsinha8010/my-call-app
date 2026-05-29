@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 
+const WS_URL = (import.meta as any).env?.VITE_WS_URL || 'http://localhost:8000';
+
 export interface Participant {
   id: string;
   name: string;
@@ -529,7 +531,7 @@ export function useWebRTC(
     const token = sessionStorage.getItem('nexalink_token');
     if (!token) return;
 
-    const socket = io('http://localhost:8000', {
+    const socket = io(WS_URL, {
       autoConnect: true,
       transports: ['websocket'],
       auth: {
