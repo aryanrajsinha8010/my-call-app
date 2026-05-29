@@ -17,6 +17,7 @@ import Whiteboard from './components/Whiteboard.tsx';
 import ChaperoneOverlay from './components/ChaperoneOverlay.tsx';
 import { LandingPage } from './components/LandingPage.tsx';
 import { encryptText, decryptText, deriveKeyFromPassphrase, encryptChunk, decryptChunk } from './lib/e2ee.ts';
+import DiagnosticsPanel from './components/DiagnosticsPanel.tsx';
 
 
 const API = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8001';
@@ -36,7 +37,7 @@ interface ChatMessage {
   status?: 'sending' | 'delivered';
 }
 
-type Tab = 'chat' | 'audio' | 'whiteboard' | 'control' | 'participants' | 'profile' | 'contacts';
+type Tab = 'chat' | 'audio' | 'whiteboard' | 'control' | 'participants' | 'profile' | 'contacts' | 'diagnostics';
 
 interface UserProfile {
   username: string;
@@ -5835,6 +5836,7 @@ export default function App() {
                   { id: 'contacts',     icon: BookUser,       label: 'Book' },
                   { id: 'profile',      icon: Sliders,        label: 'Config' },
                   { id: 'control',      icon: Lock,          label: 'Ctrl' },
+                  { id: 'diagnostics',  icon: Activity,      label: 'Diag' },
                 ] as { id: Tab; icon: any; label: string; badge?: number }[]).map(t => (
                   <button key={t.id} onClick={() => setActiveTab(t.id)}
                     className={`nx-tab ${activeTab === t.id ? 'active' : ''} relative`}>
@@ -6344,6 +6346,16 @@ export default function App() {
                       </button>
                     )}
                   </div>
+                )}
+
+                {/* ── DIAGNOSTICS PANEL ── */}
+                {activeTab === 'diagnostics' && (
+                  <DiagnosticsPanel
+                    stats={stats}
+                    participantsCount={participants.length}
+                    controlLogs={controlLogs}
+                    roomName={roomName}
+                  />
                 )}
               </div>
 
