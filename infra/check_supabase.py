@@ -108,11 +108,11 @@ try:
     cursor.execute("""
         SELECT trigger_name 
         FROM information_schema.triggers 
-        WHERE trigger_schema = 'public' AND trigger_name = 'on_auth_user_created';
+        WHERE trigger_schema = 'auth' AND trigger_name = 'on_auth_user_created';
     """)
     trig = cursor.fetchone()
     if trig:
-        print(" [OK] Trigger 'on_auth_user_created' exists.")
+        print(" [OK] Trigger 'on_auth_user_created' exists in 'auth' schema.")
     else:
         print(" [MISSING] Trigger 'on_auth_user_created' is NOT created!")
 

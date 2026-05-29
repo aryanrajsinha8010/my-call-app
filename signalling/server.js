@@ -54,6 +54,24 @@ function loadPushSubscriptionsFromFile() {
   }
 }
 
+/** Helper to get standard headers with X-Signalling-Secret for Supabase REST queries */
+function getSupabaseHeaders(contentType = null, prefer = null) {
+  const headers = {
+    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
+    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`
+  };
+  if (process.env.JWT_SECRET_KEY) {
+    headers['X-Signalling-Secret'] = process.env.JWT_SECRET_KEY.trim();
+  }
+  if (contentType) {
+    headers['Content-Type'] = contentType;
+  }
+  if (prefer) {
+    headers['Prefer'] = prefer;
+  }
+  return headers;
+}
+
 /** Load push subscriptions from Supabase database on startup */
 async function loadPushSubscriptionsFromDb() {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
@@ -62,10 +80,7 @@ async function loadPushSubscriptionsFromDb() {
     return;
   }
   const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/push_subscriptions?select=username,subscription,endpoint`;
-  const headers = {
-    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
-    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`
-  };
+  const headers = getSupabaseHeaders();
   try {
     const res = await fetch(url, { headers });
     if (!res.ok) {
@@ -101,12 +116,7 @@ function savePushSubscriptions() {
 async function savePushSubscriptionToDb(username, subscription) {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) return;
   const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/push_subscriptions`;
-  const headers = {
-    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
-    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`,
-    'Content-Type': 'application/json',
-    'Prefer': 'resolution=merge-duplicates'
-  };
+  const headers = getSupabaseHeaders('application/json', 'resolution=merge-duplicates');
   const payload = {
     username: username.trim().toLowerCase(),
     subscription: subscription,
@@ -133,10 +143,7 @@ async function savePushSubscriptionToDb(username, subscription) {
 async function deletePushSubscriptionFromDb(endpoint) {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY || !endpoint) return;
   const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`;
-  const headers = {
-    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
-    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`
-  };
+  const headers = getSupabaseHeaders();
   try {
     const res = await fetch(url, {
       method: 'DELETE',
@@ -156,10 +163,7 @@ async function deletePushSubscriptionFromDb(endpoint) {
 async function deleteUserPushSubscriptionsFromDb(username) {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY || !username) return;
   const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/push_subscriptions?username=eq.${encodeURIComponent(username.trim().toLowerCase())}`;
-  const headers = {
-    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
-    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`
-  };
+  const headers = getSupabaseHeaders();
   try {
     const res = await fetch(url, {
       method: 'DELETE',
@@ -188,12 +192,7 @@ async function saveDirectMessageToDb(sender, recipient, text) {
     return { id: Math.floor(Math.random() * 1000000), sent_at };
   }
   const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/direct_messages`;
-  const headers = {
-    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
-    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`,
-    'Content-Type': 'application/json',
-    'Prefer': 'return=representation'
-  };
+  const headers = getSupabaseHeaders('application/json', 'return=representation');
   const payload = {
     conversation_key: getConvoKey(sender, recipient),
     sender,
@@ -225,11 +224,7 @@ async function saveDirectMessageToDb(sender, recipient, text) {
 async function editDirectMessageInDb(messageId, sender, text) {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY || !messageId) return false;
   const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/direct_messages?id=eq.${messageId}&sender=eq.${encodeURIComponent(sender)}`;
-  const headers = {
-    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
-    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`,
-    'Content-Type': 'application/json'
-  };
+  const headers = getSupabaseHeaders('application/json');
   const payload = {
     text: text.substring(0, 4000)
   };
@@ -254,10 +249,7 @@ async function editDirectMessageInDb(messageId, sender, text) {
 async function deleteDirectMessageInDb(messageId, sender) {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY || !messageId) return false;
   const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/direct_messages?id=eq.${messageId}&sender=eq.${encodeURIComponent(sender)}`;
-  const headers = {
-    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
-    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`
-  };
+  const headers = getSupabaseHeaders();
   try {
     const res = await fetch(url, {
       method: 'DELETE',
@@ -300,12 +292,7 @@ async function logPushAttempt(username, type, status, errorDetails = '') {
     return;
   }
   const url = `${process.env.SUPABASE_URL.trim()}/rest/v1/notification_logs`;
-  const headers = {
-    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
-    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`,
-    'Content-Type': 'application/json',
-    'Prefer': 'return=representation'
-  };
+  const headers = getSupabaseHeaders('application/json', 'return=representation');
   const payload = {
     username: username,
     notification_type: type,

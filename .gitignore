@@ -70,3 +70,8 @@ htmlcov/
 
 # Push subscription persistence (runtime state, not code)
 .push_subscriptions.json
+
+# Agent directories
+agentskills/
+.agents/
+

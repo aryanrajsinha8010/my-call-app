@@ -39,12 +39,12 @@ def run_migration_file():
     # In PostgreSQL, we can execute the block directly or split correctly. Since supabase_schema.sql has standard statements,
     # we will run it as a single transactional block!
     try:
-        connection.execute(text("BEGIN;"))
-        connection.execute(text(sql_content))
-        connection.execute(text("COMMIT;"))
+        connection.exec_driver_sql("BEGIN;")
+        connection.exec_driver_sql(sql_content)
+        connection.exec_driver_sql("COMMIT;")
         print("[Success] Supabase migrations, triggers, and RLS policies successfully applied!")
     except Exception as e:
-        connection.execute(text("ROLLBACK;"))
+        connection.exec_driver_sql("ROLLBACK;")
         print(f"[Error] Failed to apply schema migrations: {e}")
 
 def apply_index_optimizations():

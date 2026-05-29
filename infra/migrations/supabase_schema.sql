@@ -30,14 +30,44 @@ NOTIFY pgrst, 'reload schema';
 -- Row Level Security (RLS)
 ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
 
+-- Helper to verify if the request is originating from the trusted Signalling Server
+CREATE OR REPLACE FUNCTION public.is_signalling_server()
+RETURNS BOOLEAN AS $$
+DECLARE
+    headers_text TEXT;
+BEGIN
+    headers_text := current_setting('request.headers', true);
+    IF headers_text IS NULL OR headers_text = '' THEN
+        RETURN FALSE;
+    END IF;
+    RETURN (coalesce(headers_text::json->>'x-signalling-secret', '') = '3f8a2c1d9e7b4f6a0d5c8e2b1a9f3d7e4c6b0a8f2e5d1c9b7a4f3e6d0c2b8a5f');
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- Drop existing policies if they exist
 DROP POLICY IF EXISTS "Allow public read access to profiles" ON public.user_profiles;
 DROP POLICY IF EXISTS "Allow users to update their own profile" ON public.user_profiles;
 DROP POLICY IF EXISTS "Allow users to update your own profile" ON public.user_profiles;
+DROP POLICY IF EXISTS "Allow users to modify their own profile" ON public.user_profiles;
+DROP POLICY IF EXISTS "Allow signalling modify profiles" ON public.user_profiles;
 
--- Create policies
+-- Create hardened policies for user_profiles
 CREATE POLICY "Allow public read access to profiles" 
-ON public.user_profiles FOR ALL USING (true);
+ON public.user_profiles FOR SELECT USING (true);
+
+CREATE POLICY "Allow users to modify their own profile"
+ON public.user_profiles FOR ALL 
+TO authenticated, anon
+USING (auth.uid() = id)
+WITH CHECK (auth.uid() = id);
+
+CREATE POLICY "Allow signalling modify profiles"
+ON public.user_profiles FOR ALL
+USING (public.is_signalling_server())
+WITH CHECK (public.is_signalling_server());
 
 -- Trigger to automatically map Auth users to Public user_profiles upon signup
 CREATE OR REPLACE FUNCTION public.handle_new_user()
@@ -71,7 +101,13 @@ CREATE TABLE IF NOT EXISTS public.rooms (
 
 ALTER TABLE public.rooms ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow room access policies" ON public.rooms;
-CREATE POLICY "Allow room access policies" ON public.rooms FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow room select" ON public.rooms;
+DROP POLICY IF EXISTS "Allow room insert" ON public.rooms;
+DROP POLICY IF EXISTS "Allow signalling select rooms" ON public.rooms;
+DROP POLICY IF EXISTS "Allow signalling insert rooms" ON public.rooms;
+
+CREATE POLICY "Allow signalling select rooms" ON public.rooms FOR SELECT USING (public.is_signalling_server());
+CREATE POLICY "Allow signalling insert rooms" ON public.rooms FOR INSERT WITH CHECK (public.is_signalling_server());
 
 
 -- 3. Create Call Logs Table (Tracks who joined, when, and when they left)
@@ -86,7 +122,13 @@ CREATE TABLE IF NOT EXISTS public.call_logs (
 
 ALTER TABLE public.call_logs ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow call logs access" ON public.call_logs;
-CREATE POLICY "Allow call logs access" ON public.call_logs FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow signalling select call logs" ON public.call_logs;
+DROP POLICY IF EXISTS "Allow signalling insert call logs" ON public.call_logs;
+DROP POLICY IF EXISTS "Allow signalling update call logs" ON public.call_logs;
+
+CREATE POLICY "Allow signalling select call logs" ON public.call_logs FOR SELECT USING (public.is_signalling_server());
+CREATE POLICY "Allow signalling insert call logs" ON public.call_logs FOR INSERT WITH CHECK (public.is_signalling_server());
+CREATE POLICY "Allow signalling update call logs" ON public.call_logs FOR UPDATE USING (public.is_signalling_server()) WITH CHECK (public.is_signalling_server());
 
 
 -- 4. Create Selective Recording Consent Audit Trails
@@ -100,7 +142,11 @@ CREATE TABLE IF NOT EXISTS public.recording_consents (
 
 ALTER TABLE public.recording_consents ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow recording consents access" ON public.recording_consents;
-CREATE POLICY "Allow recording consents access" ON public.recording_consents FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow signalling select recording consents" ON public.recording_consents;
+DROP POLICY IF EXISTS "Allow signalling insert recording consents" ON public.recording_consents;
+
+CREATE POLICY "Allow signalling select recording consents" ON public.recording_consents FOR SELECT USING (public.is_signalling_server());
+CREATE POLICY "Allow signalling insert recording consents" ON public.recording_consents FOR INSERT WITH CHECK (public.is_signalling_server());
 
 
 -- 5. Create Meeting Summaries & Action Items Table
@@ -115,7 +161,11 @@ CREATE TABLE IF NOT EXISTS public.meeting_summaries (
 
 ALTER TABLE public.meeting_summaries ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow meeting summaries access" ON public.meeting_summaries;
-CREATE POLICY "Allow meeting summaries access" ON public.meeting_summaries FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow signalling select meeting summaries" ON public.meeting_summaries;
+DROP POLICY IF EXISTS "Allow signalling insert meeting summaries" ON public.meeting_summaries;
+
+CREATE POLICY "Allow signalling select meeting summaries" ON public.meeting_summaries FOR SELECT USING (public.is_signalling_server());
+CREATE POLICY "Allow signalling insert meeting summaries" ON public.meeting_summaries FOR INSERT WITH CHECK (public.is_signalling_server());
 
 
 -- 6. Create Whiteboard Saves Table (referenced by save_whiteboard_snapshot_db)
@@ -129,7 +179,11 @@ CREATE TABLE IF NOT EXISTS public.whiteboard_saves (
 
 ALTER TABLE public.whiteboard_saves ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow whiteboard saves access" ON public.whiteboard_saves;
-CREATE POLICY "Allow whiteboard saves access" ON public.whiteboard_saves FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow signalling select whiteboard saves" ON public.whiteboard_saves;
+DROP POLICY IF EXISTS "Allow signalling insert whiteboard saves" ON public.whiteboard_saves;
+
+CREATE POLICY "Allow signalling select whiteboard saves" ON public.whiteboard_saves FOR SELECT USING (public.is_signalling_server());
+CREATE POLICY "Allow signalling insert whiteboard saves" ON public.whiteboard_saves FOR INSERT WITH CHECK (public.is_signalling_server());
 
 
 -- 7. Direct Messages Table
@@ -150,7 +204,15 @@ CREATE INDEX IF NOT EXISTS idx_direct_messages_convo
 
 ALTER TABLE public.direct_messages ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow direct messages access" ON public.direct_messages;
-CREATE POLICY "Allow direct messages access" ON public.direct_messages FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow signalling select DMs" ON public.direct_messages;
+DROP POLICY IF EXISTS "Allow signalling insert DMs" ON public.direct_messages;
+DROP POLICY IF EXISTS "Allow signalling update DMs" ON public.direct_messages;
+DROP POLICY IF EXISTS "Allow signalling delete DMs" ON public.direct_messages;
+
+CREATE POLICY "Allow signalling select DMs" ON public.direct_messages FOR SELECT USING (public.is_signalling_server());
+CREATE POLICY "Allow signalling insert DMs" ON public.direct_messages FOR INSERT WITH CHECK (public.is_signalling_server());
+CREATE POLICY "Allow signalling update DMs" ON public.direct_messages FOR UPDATE USING (public.is_signalling_server()) WITH CHECK (public.is_signalling_server());
+CREATE POLICY "Allow signalling delete DMs" ON public.direct_messages FOR DELETE USING (public.is_signalling_server());
 
 
 -- 8. Direct Call Logs Table
@@ -172,7 +234,15 @@ CREATE INDEX IF NOT EXISTS idx_direct_call_logs_convo
 
 ALTER TABLE public.direct_call_logs ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow direct call logs access" ON public.direct_call_logs;
-CREATE POLICY "Allow direct call logs access" ON public.direct_call_logs FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow signalling select direct call logs" ON public.direct_call_logs;
+DROP POLICY IF EXISTS "Allow signalling insert direct call logs" ON public.direct_call_logs;
+DROP POLICY IF EXISTS "Allow signalling update direct call logs" ON public.direct_call_logs;
+DROP POLICY IF EXISTS "Allow signalling delete direct call logs" ON public.direct_call_logs;
+
+CREATE POLICY "Allow signalling select direct call logs" ON public.direct_call_logs FOR SELECT USING (public.is_signalling_server());
+CREATE POLICY "Allow signalling insert direct call logs" ON public.direct_call_logs FOR INSERT WITH CHECK (public.is_signalling_server());
+CREATE POLICY "Allow signalling update direct call logs" ON public.direct_call_logs FOR UPDATE USING (public.is_signalling_server()) WITH CHECK (public.is_signalling_server());
+CREATE POLICY "Allow signalling delete direct call logs" ON public.direct_call_logs FOR DELETE USING (public.is_signalling_server());
 
 -- 9. Contacts Table (E2E persistent contact lists)
 CREATE TABLE IF NOT EXISTS public.contacts (
@@ -185,7 +255,13 @@ CREATE TABLE IF NOT EXISTS public.contacts (
 
 ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow contacts access" ON public.contacts;
-CREATE POLICY "Allow contacts access" ON public.contacts FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow signalling select contacts" ON public.contacts;
+DROP POLICY IF EXISTS "Allow signalling insert contacts" ON public.contacts;
+DROP POLICY IF EXISTS "Allow signalling delete contacts" ON public.contacts;
+
+CREATE POLICY "Allow signalling select contacts" ON public.contacts FOR SELECT USING (public.is_signalling_server());
+CREATE POLICY "Allow signalling insert contacts" ON public.contacts FOR INSERT WITH CHECK (public.is_signalling_server());
+CREATE POLICY "Allow signalling delete contacts" ON public.contacts FOR DELETE USING (public.is_signalling_server());
 
 
 -- 10. File Transfers Table (Tracks metadata & status of secure transfers)
@@ -208,7 +284,13 @@ CREATE INDEX IF NOT EXISTS idx_file_transfers_convo
 
 ALTER TABLE public.file_transfers ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow file transfers access" ON public.file_transfers;
-CREATE POLICY "Allow file transfers access" ON public.file_transfers FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow signalling select file transfers" ON public.file_transfers;
+DROP POLICY IF EXISTS "Allow signalling insert file transfers" ON public.file_transfers;
+DROP POLICY IF EXISTS "Allow signalling update file transfers" ON public.file_transfers;
+
+CREATE POLICY "Allow signalling select file transfers" ON public.file_transfers FOR SELECT USING (public.is_signalling_server());
+CREATE POLICY "Allow signalling insert file transfers" ON public.file_transfers FOR INSERT WITH CHECK (public.is_signalling_server());
+CREATE POLICY "Allow signalling update file transfers" ON public.file_transfers FOR UPDATE USING (public.is_signalling_server()) WITH CHECK (public.is_signalling_server());
 
 
 -- 11. Notification Audit & Diagnostics Logs
@@ -225,7 +307,9 @@ CREATE INDEX IF NOT EXISTS idx_notification_logs_user ON public.notification_log
 
 ALTER TABLE public.notification_logs ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow notification logs access" ON public.notification_logs;
-CREATE POLICY "Allow notification logs access" ON public.notification_logs FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow signalling insert notification logs" ON public.notification_logs;
+
+CREATE POLICY "Allow signalling insert notification logs" ON public.notification_logs FOR INSERT WITH CHECK (public.is_signalling_server());
 
 
 -- 12. Push Subscriptions Persistence Table
@@ -241,7 +325,15 @@ CREATE INDEX IF NOT EXISTS idx_push_subscriptions_username ON public.push_subscr
 
 ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow push subscriptions access" ON public.push_subscriptions;
-CREATE POLICY "Allow push subscriptions access" ON public.push_subscriptions FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow signalling select push subs" ON public.push_subscriptions;
+DROP POLICY IF EXISTS "Allow signalling insert push subs" ON public.push_subscriptions;
+DROP POLICY IF EXISTS "Allow signalling update push subs" ON public.push_subscriptions;
+DROP POLICY IF EXISTS "Allow signalling delete push subs" ON public.push_subscriptions;
+
+CREATE POLICY "Allow signalling select push subs" ON public.push_subscriptions FOR SELECT USING (public.is_signalling_server());
+CREATE POLICY "Allow signalling insert push subs" ON public.push_subscriptions FOR INSERT WITH CHECK (public.is_signalling_server());
+CREATE POLICY "Allow signalling update push subs" ON public.push_subscriptions FOR UPDATE USING (public.is_signalling_server()) WITH CHECK (public.is_signalling_server());
+CREATE POLICY "Allow signalling delete push subs" ON public.push_subscriptions FOR DELETE USING (public.is_signalling_server());
 
 
 

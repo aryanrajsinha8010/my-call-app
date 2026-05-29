@@ -25,6 +25,9 @@ def _headers(use_bearer=True):
         "apikey": SUPABASE_ANON_KEY,
         "Content-Type": "application/json"
     }
+    jwt_secret = os.getenv("JWT_SECRET_KEY", "").strip()
+    if jwt_secret:
+        h["X-Signalling-Secret"] = jwt_secret
     if use_bearer:
         h["Authorization"] = f"Bearer {SUPABASE_ANON_KEY}"
         h["Prefer"] = "return=representation"
