@@ -300,7 +300,18 @@ export default function App() {
   };
 
   /* Auth state */
-  const [authToken, setAuthToken] = useState<string | null>(() => sessionStorage.getItem('nexalink_token'));
+  const [authToken, setAuthToken] = useState<string | null>(() => {
+    let token = typeof window !== 'undefined' ? sessionStorage.getItem('nexalink_token') : null;
+    if (!token && typeof window !== 'undefined') {
+      const remember = getRememberCookie();
+      if (remember && remember.username && remember.token) {
+        sessionStorage.setItem('nexalink_token', remember.token);
+        sessionStorage.setItem('nexalink_username', remember.username);
+        token = remember.token;
+      }
+    }
+    return token;
+  });
   const [clockOffset, setClockOffset] = useState<number>(0);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
@@ -314,12 +325,14 @@ export default function App() {
   /* Room state */
   const [inRoom, setInRoom] = useState(false);
   const [roomName, setRoomName] = useState('NexaRoom-Alpha');
-  const [userName, setUserName] = useState('Alice');
+  const [userName, setUserName] = useState<string>(() => {
+    return (typeof window !== 'undefined' ? sessionStorage.getItem('nexalink_username') : null) || 'Alice';
+  });
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [directPeer, setDirectPeer] = useState('');
   const [profile, setProfile] = useState<UserProfile>(() => {
-    const username = sessionStorage.getItem('nexalink_username') || 'Alice';
+    const username = (typeof window !== 'undefined' ? sessionStorage.getItem('nexalink_username') : null) || 'Alice';
     return { username, bio: '', profilePic: '' };
   });
   const [contacts, setContacts] = useState<Contact[]>(() => {
