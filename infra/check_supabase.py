@@ -15,7 +15,7 @@ DB_PARAMS = {
     "host": "aws-1-ap-south-1.pooler.supabase.com",
     "port": 6543,
     "user": "postgres.uejwhikwtjikrsbnaabo",
-    "password": "Aryanrajsinha801%40%40",
+    "password": "Aryanrajsinha801",
     "database": "postgres",
     "sslmode": "require"
 }
