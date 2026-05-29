@@ -383,8 +383,8 @@ A→B and B→A map to the same row. It is computed as:
 # e.g., alice + bob → "alice|bob"
 ```
 
-### All tables use RLS (Row Level Security) — currently set to `FOR ALL USING (true)` for development.
-**Lock down RLS policies before production deployment.**
+### All tables use RLS (Row Level Security) and are locked down for production.
+Access is authorized for the trusted signalling server via the `X-Signalling-Secret` header, which is verified using the `public.is_signalling_server()` PL/pgSQL function. All direct client REST requests are securely filtered based on these policies.
 
 ---
 
@@ -623,8 +623,8 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 | Direct messages | DB-backed via REST API + local state | Add real-time socket relay for instant delivery |
 | AI Sidecar | Simulated Whisper/TTS responses | Connect real model weights |
 | Call merge | Multi-room state is local only | Synchronise via signalling server |
-| RLS policies | Open (`USING (true)`) | Lock down per-user policies before production |
-| Push subscriptions | In-memory only (lost on server restart) | Persist to `push_subscriptions` DB table |
+| RLS policies | Hardened per-user policies active | Fully locked down using `is_signalling_server()` function |
+| Push subscriptions | Database-backed persistence | Stored in `push_subscriptions` DB table with real-time reload |
 | TURN server | No TURN configured | Add coturn for NAT traversal in production |
 | E2EE room chat | Relay-based (server reads plaintext) | Implement Signal Protocol or Olm |
 
@@ -646,6 +646,7 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 | WebRTC media / signalling | `client/src/hooks/useWebRTC.ts` |
 | Audio processing | `client/src/hooks/useAudioPipeline.ts` |
 | Push notifications | `client/src/hooks/useNotifications.ts` + `client/public/sw.js` |
+| Landing Page | `client/src/components/LandingPage.tsx` |
 | Whiteboard | `client/src/components/Whiteboard.tsx` |
 | Remote control overlay | `client/src/components/ChaperoneOverlay.tsx` |
 | Socket event handlers | `signalling/server.js` |
@@ -657,4 +658,4 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 
 ---
 
-*Last updated: 2026-05-27 — Updated by Antigravity AI assistant.*
+*Last updated: 2026-05-29 — Updated by Antigravity AI assistant.*
