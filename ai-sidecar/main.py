@@ -1,5 +1,8 @@
 import os
 import re
+import io
+import time
+import base64
 import random
 from typing import List, Optional
 from datetime import datetime
@@ -32,6 +35,14 @@ ALLOWED_AUDIO_MIME_TYPES = {
 MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB limit
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = None
+if OPENAI_API_KEY:
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        print("[AI Sidecar] OpenAI API Key detected. Real models enabled.")
+    except ImportError:
+        print("[AI Sidecar] Warning: OpenAI key provided but openai package not installed.")
 
 class ActionItem(BaseModel):
     task: str
@@ -79,39 +90,88 @@ async def transcribe_audio(
             detail=f"Audio file too large. Maximum allowed size is {MAX_AUDIO_SIZE_BYTES // (1024*1024)} MB."
         )
 
-    # Simulated local Whisper processing for greenfield deployment
-    # Fallback to OpenAI Whisper API if API key environment exists
-    if OPENAI_API_KEY:
-        # In a real production scope, fetch audio bytes and call client.audio.transcriptions.create
-        pass
+    start_time = time.time()
+    if client:
+        try:
+            file_extension = ".wav" if content_type in ["audio/wav", "audio/wave", "audio/x-wav"] else ".mp3"
+            if "webm" in content_type: file_extension = ".webm"
+            elif "ogg" in content_type: file_extension = ".ogg"
+            elif "mp4" in content_type: file_extension = ".mp4"
+            
+            file_obj = io.BytesIO(content)
+            file_obj.name = f"audio{file_extension}"
+            
+            response = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=file_obj,
+                response_format="json"
+            )
+            text = response.text
+        except Exception as e:
+            print(f"[AI Speech] Error calling OpenAI Whisper API: {e}")
+            raise HTTPException(status_code=500, detail="Failed to process audio with AI models.")
+    else:
+        # Safe rule-based context simulation matching real-world transcripts
+        simulated_texts = [
+            "Alice, please complete the database migration by Friday.",
+            "We need to review the DTLS encryption code tomorrow morning.",
+            "I will set up the TURN coturn server clusters this afternoon.",
+            "Let's launch the k6 stress test on signaling sockets today at 5 PM."
+        ]
+        text = random.choice(simulated_texts)
     
-    # Safe rule-based context simulation matching real-world transcripts
-    simulated_texts = [
-        "Alice, please complete the database migration by Friday.",
-        "We need to review the DTLS encryption code tomorrow morning.",
-        "I will set up the TURN coturn server clusters this afternoon.",
-        "Let's launch the k6 stress test on signaling sockets today at 5 PM."
-    ]
-    # BUG FIX #14: random is now imported at top-level (removed from function body)
-    text = random.choice(simulated_texts)
+    processing_time_ms = int((time.time() - start_time) * 1000)
     
     return {
         "room_name": room_name,
         "transcript": text,
         "language": "en",
         "timestamp": datetime.utcnow().isoformat(),
-        "processing_time_ms": 145
+        "processing_time_ms": processing_time_ms
     }
 
 # Speech generation endpoint (Coqui TTS)
 @app.post("/api/ai/tts")
 async def generate_speech(request: TTSRequest):
-    # If XTTS-v2 is configured locally, fetch voice weights and generate wav
-    # Fallback to cloud TTS if desired
     print(f"[AI Speech] Synthesizing Voice <{request.voice}> (Pitch: {request.pitch_factor}): \"{request.text}\"")
     
-    # In a full deployment, this returns audio/wav binary stream
-    # For initial integration, return base64 payload representation
+    if client:
+        try:
+            openai_voice = "alloy"
+            voice_map = {
+                "XTTS-v2 Host Male": "onyx",
+                "XTTS-v2 Host Female": "nova",
+                "alloy": "alloy",
+                "echo": "echo",
+                "fable": "fable",
+                "onyx": "onyx",
+                "nova": "nova",
+                "shimmer": "shimmer"
+            }
+            mapped_voice = voice_map.get(request.voice, openai_voice)
+            
+            response = client.audio.speech.create(
+                model="tts-1",
+                voice=mapped_voice,
+                input=request.text
+            )
+            
+            audio_content = response.content
+            base64_audio = base64.b64encode(audio_content).decode('utf-8')
+            
+            return {
+                "status": "SUCCESS",
+                "voice": mapped_voice,
+                "text": request.text,
+                "audio_format": "mp3",
+                "sample_rate": 24000,
+                "base64_audio": base64_audio
+            }
+        except Exception as e:
+            print(f"[AI Speech] Error calling OpenAI TTS API: {e}")
+            raise HTTPException(status_code=500, detail="Failed to synthesize speech with AI models.")
+    
+    # Fallback to simulated base64 payload representation
     return {
         "status": "SUCCESS",
         "voice": request.voice,

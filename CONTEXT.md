@@ -340,8 +340,7 @@ Runs on port 8002. Three endpoints:
 | `POST` | `/api/ai/tts` | Generate speech from text (Coqui XTTS-v2 / simulated) |
 | `POST` | `/api/ai/actions` | Extract action items from transcript (regex NLP) |
 
-**Current state:** Simulated responses — real Whisper/XTTS integration is scaffolded but depends on
-model weights being downloaded. Set `OPENAI_API_KEY` in env to enable OpenAI Whisper fallback.
+**Current state:** Dynamically configured to use OpenAI Whisper and TTS APIs if `OPENAI_API_KEY` is present in the environment. If the key is missing, it safely falls back to local simulated responses.
 
 ---
 
@@ -621,7 +620,7 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 | Area | Current State | Future |
 |---|---|---|
 | Direct messages | DB-backed via REST API + local state | Add real-time socket relay for instant delivery |
-| AI Sidecar | Simulated Whisper/TTS responses | Connect real model weights |
+| AI Sidecar | OpenAI API integrated for Whisper & TTS | Deploy local model weights for fully air-gapped support |
 | Call merge | Multi-room state is local only | Synchronise via signalling server |
 | RLS policies | Hardened per-user policies active | Fully locked down using `is_signalling_server()` function |
 | Push subscriptions | Database-backed persistence | Stored in `push_subscriptions` DB table with real-time reload |
@@ -658,4 +657,4 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 
 ---
 
-*Last updated: 2026-05-29 — Updated by Antigravity AI assistant.*
+*Last updated: 2026-05-29 — Updated by NexaLink Autonomous Evolution Agent (Connected OpenAI Whisper & TTS API to AI Sidecar).*
