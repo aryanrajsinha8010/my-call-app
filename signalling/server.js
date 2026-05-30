@@ -554,6 +554,15 @@ const onlineUsers = {};  // { username: socketId }
 // --- SEC-14 FIX: Validate and sanitize whiteboard stroke data ---
 // Prevents peers from sending malicious payloads (extreme values, script in color)
 function sanitizeStroke(stroke) {
+  // Support E2EE-encrypted stroke payloads
+  if (typeof stroke === 'string' && stroke.startsWith('[E2EE]:')) {
+    const parts = stroke.split(':');
+    if (parts.length === 3 && parts[1] && parts[2]) {
+      return stroke; // Relayed safely as-is
+    }
+    return null;
+  }
+
   if (!stroke || typeof stroke !== 'object') return null;
 
   // CSS color: allow hex (#rrggbb or #rgb), named colors (only alpha chars), rgb()/rgba()
@@ -577,6 +586,15 @@ function sanitizeStroke(stroke) {
 
 // --- SEC-14 FIX: Validate and sanitize whiteboard shape data ---
 function sanitizeShape(shape) {
+  // Support E2EE-encrypted shape payloads
+  if (typeof shape === 'string' && shape.startsWith('[E2EE]:')) {
+    const parts = shape.split(':');
+    if (parts.length === 3 && parts[1] && parts[2]) {
+      return shape; // Relayed safely as-is
+    }
+    return null;
+  }
+
   if (!shape || typeof shape !== 'object') return null;
 
   const validTypes = ['rectangle', 'circle', 'line', 'arrow'];
@@ -786,6 +804,15 @@ io.on('connection', (socket) => {
         });
       }
     }
+  });
+
+  socket.on('room_typing', ({ roomName, username, isTyping }) => {
+    if (!roomName) return;
+    const safeUsername = typeof username === 'string' ? username.slice(0, 80) : 'Peer';
+    socket.to(roomName).emit('room_typing', {
+      username: safeUsername,
+      isTyping: !!isTyping
+    });
   });
 
 
@@ -1139,6 +1166,21 @@ io.on('connection', (socket) => {
     if (targetSocketId) {
       io.to(targetSocketId).emit('direct_message_delete', { messageId, senderUsername: sender });
       console.log(`[Presence] Message delete relayed to ${targetUsername} for message ID: ${messageId}`);
+    }
+  });
+
+  socket.on('direct_message_typing', ({ targetUsername, senderUsername, isTyping }) => {
+    if (typeof targetUsername !== 'string') return;
+    const sender = socket.data.user?.username || senderUsername || registeredUsername || 'Peer';
+    const recipient = targetUsername.trim();
+    const key = recipient.toLowerCase();
+
+    const targetSocketId = onlineUsers[key];
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('direct_message_typing', {
+        senderUsername: sender,
+        isTyping: !!isTyping
+      });
     }
   });
 

@@ -405,6 +405,10 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [unreadChat, setUnreadChat] = useState(0);
+  const [roomTypingUsers, setRoomTypingUsers] = useState<Set<string>>(new Set());
+  const [dmTypingStatus, setDmTypingStatus] = useState<Record<string, boolean>>({});
+  const localRoomTypingTimeoutRef = useRef<any>(null);
+  const localDmTypingTimeoutRef = useRef<Record<string, any>>({});
 
   /* Client-Side E2EE Room & DM States */
   const [roomPassphrase, setRoomPassphrase] = useState('');
@@ -723,6 +727,62 @@ export default function App() {
     sessionStorage.setItem('nexalink_notifications', JSON.stringify(inboxNotifications));
   }, [inboxNotifications]);
 
+  const handleRoomChatInputChange = (val: string) => {
+    setChatInput(val);
+    
+    if (!inRoom || !roomName || !chatSettings.typingIndicators || !socket) return;
+    
+    if (localRoomTypingTimeoutRef.current) {
+      clearTimeout(localRoomTypingTimeoutRef.current);
+    } else {
+      socket.emit('room_typing', {
+        roomName,
+        username: myAlias.name,
+        isTyping: true
+      });
+    }
+    
+    localRoomTypingTimeoutRef.current = setTimeout(() => {
+      if (socket) {
+        socket.emit('room_typing', {
+          roomName,
+          username: myAlias.name,
+          isTyping: false
+        });
+      }
+      localRoomTypingTimeoutRef.current = null;
+    }, 3000);
+  };
+
+  const handleLobbyChatInputChange = (val: string) => {
+    setLobbyChatInput(val);
+    
+    if (!activeChatContact || !chatSettings.typingIndicators || !socket) return;
+    
+    const contactName = activeChatContact.username;
+    
+    if (localDmTypingTimeoutRef.current[contactName]) {
+      clearTimeout(localDmTypingTimeoutRef.current[contactName]);
+    } else {
+      socket.emit('direct_message_typing', {
+        targetUsername: contactName,
+        senderUsername: userName,
+        isTyping: true
+      });
+    }
+    
+    localDmTypingTimeoutRef.current[contactName] = setTimeout(() => {
+      if (socket) {
+        socket.emit('direct_message_typing', {
+          targetUsername: contactName,
+          senderUsername: userName,
+          isTyping: false
+        });
+      }
+      delete localDmTypingTimeoutRef.current[contactName];
+    }, 3000);
+  };
+
   const sendLobbyChat = async () => {
     if (!activeChatContact || !lobbyChatInput.trim()) return;
     if (!socket) {
@@ -730,6 +790,19 @@ export default function App() {
       return;
     }
     const rawText = lobbyChatInput.trim();
+
+    // Immediately clear typing state
+    const contactName = activeChatContact.username;
+    if (localDmTypingTimeoutRef.current[contactName]) {
+      clearTimeout(localDmTypingTimeoutRef.current[contactName]);
+      delete localDmTypingTimeoutRef.current[contactName];
+    }
+    socket.emit('direct_message_typing', {
+      targetUsername: contactName,
+      senderUsername: userName,
+      isTyping: false
+    });
+
     const clientMsgId = `client-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     
     let textToSend = rawText;
@@ -2307,6 +2380,11 @@ export default function App() {
     setInRoom(false);
     setActiveRoomId(null);
     setChatMessages([]);
+    setRoomTypingUsers(new Set());
+    if (localRoomTypingTimeoutRef.current) {
+      clearTimeout(localRoomTypingTimeoutRef.current);
+      localRoomTypingTimeoutRef.current = null;
+    }
     setCurrentView('lobby');
     showToast('Disconnected from room.', 'info');
   };
@@ -2701,6 +2779,27 @@ export default function App() {
     socket.on('incoming_call', handleIncomingCall);
     socket.on('call_cancelled', handleCallCancelled);
     socket.on('call_response', handleCallResponseEvent);
+    const handleDirectMessageTyping = (data: { senderUsername: string; isTyping: boolean }) => {
+      if (!chatSettings.typingIndicators) return;
+      setDmTypingStatus(prev => ({
+        ...prev,
+        [data.senderUsername]: data.isTyping
+      }));
+    };
+
+    const handleRoomTyping = (data: { username: string; isTyping: boolean }) => {
+      if (!chatSettings.typingIndicators) return;
+      setRoomTypingUsers(prev => {
+        const next = new Set(prev);
+        if (data.isTyping) {
+          next.add(data.username);
+        } else {
+          next.delete(data.username);
+        }
+        return next;
+      });
+    };
+
     socket.on('direct_message', handleDirectMessage);
     socket.on('direct_message_delivered', handleDirectMessageDelivered);
     socket.on('direct_message_edit', handleDirectMessageEdit);
@@ -2712,6 +2811,8 @@ export default function App() {
     socket.on('file_offer', handleFileOffer);
     socket.on('file_answer', handleFileAnswer);
     socket.on('file_ice_candidate', handleFileIceCandidate);
+    socket.on('direct_message_typing', handleDirectMessageTyping);
+    socket.on('room_typing', handleRoomTyping);
 
     return () => {
       socket.off('incoming_call', handleIncomingCall);
@@ -2730,6 +2831,8 @@ export default function App() {
       socket.off('file_ice_candidate', handleFileIceCandidate);
       socket.off('online_users_list', handleOnlineUsersList);
       socket.off('presence_update', handlePresenceUpdate);
+      socket.off('direct_message_typing', handleDirectMessageTyping);
+      socket.off('room_typing', handleRoomTyping);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, userName]);
@@ -2986,6 +3089,19 @@ export default function App() {
   const sendChat = async () => {
     if (!chatInput.trim()) return;
     const rawText = chatInput.trim();
+
+    // Immediately clear room typing state
+    if (localRoomTypingTimeoutRef.current) {
+      clearTimeout(localRoomTypingTimeoutRef.current);
+      localRoomTypingTimeoutRef.current = null;
+    }
+    if (socket) {
+      socket.emit('room_typing', {
+        roomName,
+        username: myAlias.name,
+        isTyping: false
+      });
+    }
     let textToSend = rawText;
     
     // Encrypt if roomE2eeKey is available
@@ -4865,7 +4981,9 @@ export default function App() {
                               </div>
                               <div className="flex-1 min-w-0">
                                 <p className="text-3xs font-semibold text-white truncate">{c.username}</p>
-                                <p className="text-[10px] text-slate-500 truncate">{(lobbyChats[c.username] || []).slice(-1)[0]?.text || 'No messages yet'}</p>
+                                <p className={`text-[10px] truncate ${dmTypingStatus[c.username] ? 'text-emerald-400 font-semibold animate-pulse' : 'text-slate-500'}`}>
+                                  {dmTypingStatus[c.username] ? 'typing...' : ((lobbyChats[c.username] || []).slice(-1)[0]?.text || 'No messages yet')}
+                                </p>
                               </div>
                             </div>
                           );
@@ -4902,7 +5020,13 @@ export default function App() {
                                   {onlineUsers.has(activeChatContact.username.toLowerCase()) ? 'online' : 'offline'}
                                 </span>
                               </h4>
-                              <p className="text-[10px] text-slate-500 font-mono mt-0.5">{activeChatContact.bio || 'Secure Contact'}</p>
+                              <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                                {dmTypingStatus[activeChatContact.username] ? (
+                                  <span className="text-emerald-400 font-semibold animate-pulse">typing...</span>
+                                ) : (
+                                  activeChatContact.bio || 'Secure Contact'
+                                )}
+                              </p>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -5111,6 +5235,19 @@ export default function App() {
                               );
                             })
                           )}
+                          {dmTypingStatus[activeChatContact.username] && (
+                            <div className="chat-bubble remote flex flex-col group relative mt-1 max-w-[200px]" style={{ transition: 'opacity 0.3s ease' }}>
+                              <span className="sender">{activeChatContact.username}</span>
+                              <div className="bubble flex items-center gap-2">
+                                <span className="flex gap-0.5">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                                </span>
+                                <span className="text-3xs text-indigo-400 italic font-medium">typing...</span>
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         {/* File Transfer Progress Card */}
@@ -5203,7 +5340,7 @@ export default function App() {
                           <input 
                             className="nx-input flex-1 text-xs" 
                             value={lobbyChatInput}
-                            onChange={e => setLobbyChatInput(e.target.value)}
+                            onChange={e => handleLobbyChatInputChange(e.target.value)}
                             onKeyDown={e => { if (chatSettings.pressEnterToSend && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendLobbyChat(); } }}
                             placeholder={`Message ${activeChatContact.username}...`} 
                           />
@@ -6200,11 +6337,21 @@ export default function App() {
                           </div>
                         ))
                       )}
+                      {roomTypingUsers.size > 0 && (
+                        <div className="flex items-center gap-2 text-3xs text-indigo-400 italic px-2.5 py-1.5 bg-white/2 rounded-xl max-w-max self-start border border-white/5 animate-pulse mt-1">
+                          <span className="flex gap-0.5">
+                            <span className="w-1 h-1 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                            <span className="w-1 h-1 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                            <span className="w-1 h-1 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                          </span>
+                          {Array.from(roomTypingUsers).join(', ')} {roomTypingUsers.size === 1 ? 'is' : 'are'} typing...
+                        </div>
+                      )}
                       <div ref={chatEndRef} />
                     </div>
                     <div className="flex gap-2 mt-auto pt-2 border-t border-white/5">
                       <input className="nx-input flex-1 text-xs" value={chatInput}
-                        onChange={e => setChatInput(e.target.value)}
+                        onChange={e => handleRoomChatInputChange(e.target.value)}
                         onKeyDown={e => { if (chatSettings.pressEnterToSend && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } }}
                         placeholder="Message…" />
                       <button onClick={sendChat} disabled={!chatInput.trim()}
@@ -6217,7 +6364,7 @@ export default function App() {
 
                 {/* ── WHITEBOARD PANEL ── */}
                 {activeTab === 'whiteboard' && (
-                  <Whiteboard socket={socket} roomName={roomName} />
+                  <Whiteboard socket={socket} roomName={roomName} e2eeKey={roomE2eeKey} />
                 )}
 
                 {/* ── PARTICIPANTS PANEL ── */}

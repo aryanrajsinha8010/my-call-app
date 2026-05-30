@@ -3,9 +3,10 @@ import {
   Trash2, RotateCcw, RotateCw, Download, PenTool, Eraser, 
   FolderOpen, UploadCloud, Palette, Sliders, CloudLightning,
   Sparkles, Check, AlertCircle, RefreshCw, Type, Image,
-  Square, Circle, Minus, ArrowRight
+  Square, Circle, Minus, ArrowRight, Lock
 } from 'lucide-react';
 import { Socket } from 'socket.io-client';
+import { encryptText, decryptText } from '../lib/e2ee.ts';
 
 interface ShapeData {
   type: 'rectangle' | 'circle' | 'line' | 'arrow';
@@ -21,6 +22,7 @@ interface ShapeData {
 interface WhiteboardProps {
   socket: Socket | null;
   roomName: string;
+  e2eeKey?: CryptoKey | null;
 }
 
 interface Stroke {
@@ -33,7 +35,7 @@ interface Stroke {
   isEraser: boolean;
 }
 
-export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
+export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -282,7 +284,17 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
     };
 
     if (broadcast && socket) {
-      socket.emit('load_whiteboard', { roomName, url });
+      (async () => {
+        let finalUrl = url;
+        if (e2eeKey) {
+          try {
+            finalUrl = await encryptText(url, e2eeKey);
+          } catch (err) {
+            console.error("Whiteboard load URL encryption failed:", err);
+          }
+        }
+        socket.emit('load_whiteboard', { roomName, url: finalUrl });
+      })();
     }
   };
 
@@ -394,16 +406,27 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
         
         // Sync text drawing with peers over custom text_event
         if (socket) {
-          socket.emit('text_event', {
-            roomName,
-            textData: {
-              x,
-              y,
-              text: textToDraw,
-              color: convertPeachToGold(color),
-              fontSize
+          const textData = {
+            x,
+            y,
+            text: textToDraw,
+            color: convertPeachToGold(color),
+            fontSize
+          };
+          (async () => {
+            let finalTextData: any = textData;
+            if (e2eeKey) {
+              try {
+                finalTextData = await encryptText(JSON.stringify(textData), e2eeKey);
+              } catch (err) {
+                console.error("Text annotation encryption failed:", err);
+              }
             }
-          });
+            socket.emit('text_event', {
+              roomName,
+              textData: finalTextData
+            });
+          })();
         }
         showToast("Text annotation placed", "success");
       }
@@ -428,16 +451,27 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
           
           // Sync drawing with peers over socket
           if (socket) {
-            socket.emit('image_event', {
-              roomName,
-              imageData: {
-                x: startX,
-                y: startY,
-                url: urlToDraw,
-                width: imageWidth,
-                height: imageHeight
+            const imageData = {
+              x: startX,
+              y: startY,
+              url: urlToDraw,
+              width: imageWidth,
+              height: imageHeight
+            };
+            (async () => {
+              let finalImageData: any = imageData;
+              if (e2eeKey) {
+                try {
+                  finalImageData = await encryptText(JSON.stringify(imageData), e2eeKey);
+                } catch (err) {
+                  console.error("Image annotation encryption failed:", err);
+                }
               }
-            });
+              socket.emit('image_event', {
+                roomName,
+                imageData: finalImageData
+              });
+            })();
           }
           showToast("Image annotation placed", "success");
         };
@@ -524,7 +558,17 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
         size: brushSize,
         isEraser: tool === 'eraser'
       };
-      socket.emit('draw_event', { roomName, strokeData });
+      (async () => {
+        let finalStrokeData: any = strokeData;
+        if (e2eeKey) {
+          try {
+            finalStrokeData = await encryptText(JSON.stringify(strokeData), e2eeKey);
+          } catch (err) {
+            console.error("Whiteboard stroke encryption failed:", err);
+          }
+        }
+        socket.emit('draw_event', { roomName, strokeData: finalStrokeData });
+      })();
     }
 
     lastPos.current = { x, y };
@@ -550,7 +594,7 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
       // Broadcast shape event to peers
       if (socket) {
         const shapeData = {
-          type: tool,
+          type: tool as 'rectangle' | 'circle' | 'line' | 'arrow',
           startX,
           startY,
           endX: x,
@@ -559,7 +603,17 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
           size: brushSize,
           fill: fillShapes
         };
-        socket.emit('shape_event', { roomName, shapeData });
+        (async () => {
+          let finalShapeData: any = shapeData;
+          if (e2eeKey) {
+            try {
+              finalShapeData = await encryptText(JSON.stringify(shapeData), e2eeKey);
+            } catch (err) {
+              console.error("Whiteboard shape encryption failed:", err);
+            }
+          }
+          socket.emit('shape_event', { roomName, shapeData: finalShapeData });
+        })();
       }
     }
     
@@ -633,22 +687,40 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('remote_draw', (stroke: Stroke) => {
+    socket.on('remote_draw', async (stroke: Stroke | string) => {
+      let finalStroke: Stroke;
+      if (typeof stroke === 'string') {
+        if (e2eeKey) {
+          try {
+            const decrypted = await decryptText(stroke, e2eeKey);
+            finalStroke = JSON.parse(decrypted);
+          } catch (err) {
+            console.warn('[E2EE Whiteboard] Failed to decrypt remote draw stroke:', err);
+            return;
+          }
+        } else {
+          console.warn('[E2EE Whiteboard] Received encrypted stroke but no E2EE key is active.');
+          return;
+        }
+      } else {
+        finalStroke = stroke;
+      }
+
       const ctx = getCanvasContext();
       if (!ctx) return;
 
       ctx.beginPath();
-      ctx.moveTo(stroke.lastX, stroke.lastY);
-      ctx.lineTo(stroke.x, stroke.y);
-      ctx.lineWidth = stroke.size;
+      ctx.moveTo(finalStroke.lastX, finalStroke.lastY);
+      ctx.lineTo(finalStroke.x, finalStroke.y);
+      ctx.lineWidth = finalStroke.size;
       ctx.lineCap = 'round';
       
-      if (stroke.isEraser) {
+      if (finalStroke.isEraser) {
         ctx.globalCompositeOperation = 'destination-out';
         ctx.stroke();
         ctx.globalCompositeOperation = 'source-over';
       } else {
-        ctx.strokeStyle = convertPeachToGold(stroke.color);
+        ctx.strokeStyle = convertPeachToGold(finalStroke.color);
         ctx.stroke();
       }
     });
@@ -661,49 +733,117 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
       }
     });
 
-    socket.on('remote_load', ({ url }: { url: string }) => {
-      loadWhiteboardFromUrl(url, false);
+    socket.on('remote_load', async ({ url }: { url: string }) => {
+      let finalUrl = url;
+      if (url.startsWith('[E2EE]:')) {
+        if (e2eeKey) {
+          try {
+            finalUrl = await decryptText(url, e2eeKey);
+          } catch (err) {
+            console.warn('[E2EE Whiteboard] Failed to decrypt remote load URL:', err);
+            return;
+          }
+        } else {
+          console.warn('[E2EE Whiteboard] Received encrypted load URL but no E2EE key is active.');
+          return;
+        }
+      }
+      loadWhiteboardFromUrl(finalUrl, false);
     });
 
-    socket.on('remote_text', (textData: { x: number; y: number; text: string; color: string; fontSize: number }) => {
+    socket.on('remote_text', async (textData: { x: number; y: number; text: string; color: string; fontSize: number } | string) => {
+      let finalText: { x: number; y: number; text: string; color: string; fontSize: number };
+      if (typeof textData === 'string') {
+        if (e2eeKey) {
+          try {
+            const decrypted = await decryptText(textData, e2eeKey);
+            finalText = JSON.parse(decrypted);
+          } catch (err) {
+            console.warn('[E2EE Whiteboard] Failed to decrypt remote text:', err);
+            return;
+          }
+        } else {
+          console.warn('[E2EE Whiteboard] Received encrypted text but no E2EE key is active.');
+          return;
+        }
+      } else {
+        finalText = textData;
+      }
+
       const ctx = getCanvasContext();
       if (!ctx) return;
-      ctx.font = `${textData.fontSize}px sans-serif`;
-      ctx.fillStyle = convertPeachToGold(textData.color);
-      ctx.fillText(textData.text, textData.x, textData.y);
+      ctx.font = `${finalText.fontSize}px sans-serif`;
+      ctx.fillStyle = convertPeachToGold(finalText.color);
+      ctx.fillText(finalText.text, finalText.x, finalText.y);
     });
 
-    socket.on('remote_image', (imageData: { x: number; y: number; url: string; width: number; height: number }) => {
+    socket.on('remote_image', async (imageData: { x: number; y: number; url: string; width: number; height: number } | string) => {
+      let finalImage: { x: number; y: number; url: string; width: number; height: number };
+      if (typeof imageData === 'string') {
+        if (e2eeKey) {
+          try {
+            const decrypted = await decryptText(imageData, e2eeKey);
+            finalImage = JSON.parse(decrypted);
+          } catch (err) {
+            console.warn('[E2EE Whiteboard] Failed to decrypt remote image:', err);
+            return;
+          }
+        } else {
+          console.warn('[E2EE Whiteboard] Received encrypted image but no E2EE key is active.');
+          return;
+        }
+      } else {
+        finalImage = imageData;
+      }
+
       const ctx = getCanvasContext();
       if (!ctx) return;
       const img = new window.Image();
       img.crossOrigin = "anonymous";
-      img.src = imageData.url;
+      img.src = finalImage.url;
       img.onload = () => {
-        ctx.drawImage(img, imageData.x, imageData.y, imageData.width, imageData.height);
+        ctx.drawImage(img, finalImage.x, finalImage.y, finalImage.width, finalImage.height);
       };
     });
 
-    socket.on('remote_shape', (shapeData: ShapeData) => {
+    socket.on('remote_shape', async (shapeData: ShapeData | string) => {
+      let finalShape: ShapeData;
+      if (typeof shapeData === 'string') {
+        if (e2eeKey) {
+          try {
+            const decrypted = await decryptText(shapeData, e2eeKey);
+            finalShape = JSON.parse(decrypted);
+          } catch (err) {
+            console.warn('[E2EE Whiteboard] Failed to decrypt remote shape:', err);
+            return;
+          }
+        } else {
+          console.warn('[E2EE Whiteboard] Received encrypted shape but no E2EE key is active.');
+          return;
+        }
+      } else {
+        finalShape = shapeData;
+      }
+
       const canvas = canvasRef.current;
       const ctx = getCanvasContext();
       if (!canvas || !ctx) return;
 
       saveState();
       
-      ctx.lineWidth = shapeData.size;
-      ctx.strokeStyle = convertPeachToGold(shapeData.color);
-      ctx.fillStyle = convertPeachToGold(shapeData.color);
+      ctx.lineWidth = finalShape.size;
+      ctx.strokeStyle = convertPeachToGold(finalShape.color);
+      ctx.fillStyle = convertPeachToGold(finalShape.color);
       ctx.lineCap = 'round';
 
       drawShapeOnCtx(
         ctx,
-        shapeData.type,
-        shapeData.startX,
-        shapeData.startY,
-        shapeData.endX,
-        shapeData.endY,
-        shapeData.fill
+        finalShape.type,
+        finalShape.startX,
+        finalShape.startY,
+        finalShape.endX,
+        finalShape.endY,
+        finalShape.fill
       );
     });
 
@@ -715,7 +855,7 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
       socket.off('remote_image');
       socket.off('remote_shape');
     };
-  }, [socket]);
+  }, [socket, e2eeKey]);
 
   return (
     <div className="space-y-4 relative whiteboard-container">
@@ -737,6 +877,12 @@ export default function Whiteboard({ socket, roomName }: WhiteboardProps) {
         
         {/* Draw Tools Selection */}
         <div className="flex flex-wrap items-center gap-3">
+          {e2eeKey && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-mono font-semibold shadow-sm animate-pulse">
+              <Lock className="w-3.5 h-3.5 text-emerald-400" />
+              <span>AES-256 E2EE Active</span>
+            </div>
+          )}
           <div className="flex bg-slate-900/60 p-1 rounded-xl border border-white/5 flex-wrap gap-0.5">
             <button 
               type="button"

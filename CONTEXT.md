@@ -240,6 +240,8 @@ pushSubscriptions // { [username]: PushSubscription } — Web Push subs
 | `call_response` | `{ callerId, response }` | Accept/decline call |
 | `call_cancel` | `{ targetUsername }` | Cancel outgoing call |
 | `control_revoke` | — | Emergency kill (from desktop agent) |
+| `room_typing` | `{ roomName, username, isTyping }` | Broadcast room typing status |
+| `direct_message_typing` | `{ targetUsername, senderUsername, isTyping }` | Send DM typing status to target user |
 
 ### Socket.IO Events (Server → Client)
 
@@ -270,6 +272,8 @@ pushSubscriptions // { [username]: PushSubscription } — Web Push subs
 | `call_response` | `{ response }` | Other party's call response |
 | `call_invite_failed` | `{ reason, targetUsername }` | Call failed (offline) |
 | `call_cancelled` | — | Caller cancelled call |
+| `room_typing` | `{ username, isTyping }` | Incoming room typing indicator status |
+| `direct_message_typing` | `{ senderUsername, isTyping }` | Incoming DM typing indicator status |
 
 ### HTTP Endpoints (Signalling Server)
 
@@ -669,6 +673,6 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 
 ---
 
-*Last updated: 2026-05-29 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented chunk-by-chunk End-to-End Encryption (E2EE) using AES-GCM-256 for WebRTC P2P File Transfers; developed client-side cryptographic encryption/decryption pipelines with prepended 12-byte initialization vectors in `e2ee.ts`; fully integrated the secure handshake in the `App.tsx` receiver and sender WebRTC event streams with real-time UI/UX state updates, premium emerald lock badges, custom glassmorphic progress cards, and fail-safe remote cancel protocols; Implemented dynamic TURN server RFC 5766 coturn credential generation in FastAPI API Gateway, dynamic frontend client auto-discovery and loading for WebRTC, and real-time push subscriptions background synchronization reload in the Node.js signaling server; Integrated the DiagnosticsPanel sidebar tab for real-time WebRTC connection stats, network metrics, bandwidth charts, DSP codec information, and security audit logs, fueled by upgraded live RTCPeerConnection telemetry API hooks; Developed and fully integrated real-time AI speech-to-text transcription, live floating closed captions broadcasting overlays, and deep NLP-driven action item & meeting minutes summary extraction panels, backed by real-time signaling data relay, automated multi-mime recording loops, and connection to the AI Sidecar microservice; Designed and implemented high-fidelity real-time vocal morphing and DSP voice preservation, powered by a custom granular overlap-add Pitch Shifter Web Audio node and premium sound presets including Helium, Deep Monster, metallic Ring Modulator robot voice, and vintage walkie-talkie analog bandpass distortion; Designed and implemented a dynamic dual-path TTS (Text-to-Speech) transmission pipeline integrated inside the voice panel, supporting real-time premium neural speech generation using AI Sidecar (FastAPI) and seamless offline fallback to the Web Speech API (local OS voices), featuring vocal pitch control, and multi-user synchronized socket relays for high-fidelity communication).*
+*Last updated: 2026-05-30 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented military-grade client-side End-to-End Encryption (E2EE) for the real-time interactive Whiteboard component using AES-GCM-256; integrated SubtleCrypto encryptText and decryptText pipelines in `Whiteboard.tsx` for drawing events, shapes, text annotations, image attachments, and cloud snapshot loading; added a visual emerald Lock status indicator to the Whiteboard tool board; updated `signalling/server.js` stroke and shape sanitization filters to seamlessly relay E2EE-wrapped envelope strings while maintaining strict sanitization for unencrypted rooms).*
 
 
