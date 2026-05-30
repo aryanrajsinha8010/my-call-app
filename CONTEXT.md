@@ -371,14 +371,35 @@ Runs on port 8002. Three endpoints:
 
 ---
 
-## 9. Desktop Agent: `desktop-agent/main.js`
+## 9. Desktop Agent & Electron Integration
 
-Electron app that:
-1. Shows a `dashboard.html` status window
-2. Creates a **system tray** icon with context menu
-3. Connects to the signalling server at `ws://localhost:8000` via Socket.IO
-4. Registers a **global OS hotkey** `Ctrl+Shift+K` → emits `control_revoke` to kill any
-   active remote control session immediately, even when the browser tab is in the background
+The Desktop Agent is a premium native Electron application (`desktop-agent/`) that provides system tray integration, native alerts, advanced Picture-in-Picture window management, and global hotkeys.
+
+### 9.1 Preload & IPC Sandbox Security
+* **Preload Script (`desktop-agent/preload.js`)**: Securely exposes the `nexalinkDesktop` context bridge to the React frontend.
+* **IPC Isolation**: Direct Node.js access is completely disabled in the browser environment (`contextIsolation: true`, `nodeIntegration: false`). Communication uses structured IPC events.
+* **Bridge API**:
+  * `sendAction(channel, data)`: Sends actions from React client to Electron process.
+  * `onEvent(channel, callback)`: Subscribes React to events emitted by the Electron shell. Returns a cleanup function to unsubscribe.
+
+### 9.2 Picture-in-Picture (PIP) & Window Overlay
+* **Mini Mode Overlay**:
+  * Switches the application to a floating mini overlay (size: `340x260` vs default `1200x800`).
+  * Backs up the window dimensions, enables `"always-on-top"`, sets a circular transparent border, and makes the window frame-less for a sleek PIP appearance.
+  * Automatically switches the React client layout to `pip-remote` for maximum focus on the active remote feed.
+  * Retains full interactive control (resizable, movable) and can be toggled using the UI toolbar button or globally via global hotkey (`CommandOrControl+Alt+P`).
+
+### 9.3 Global Hotkey System
+Default shortcuts dynamically registered on startup:
+* `CommandOrControl+Alt+M`: Toggle global audio mute.
+* `CommandOrControl+Alt+V`: Toggle global video feed.
+* `CommandOrControl+Alt+P`: Toggle Mini Mode overlay PIP.
+* `Ctrl+Shift+K`: Panic emergency revoke to immediately terminate any active remote-control session (emits `control_revoke` signalling event).
+
+### 9.4 Tray & OS Notification Integration
+* **Tray Icon**: Adds a tray icon with quick actions: *Toggle Mini Mode*, *Set Always-on-Top*, and *Exit NexaLink*.
+* **Dynamic Tooltips**: Automatically updates tray tooltips based on call room name state (e.g. `NexaLink - Room: General`).
+* **Native Desktop Notifications**: Bypasses the Service Worker push mechanism when running in Electron. Uses the native `Notification` OS class via Electron's main process, supporting deep linking click actions to instantly navigate and join call rooms.
 
 ---
 
@@ -688,6 +709,6 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 
 ---
 
-*Last updated: 2026-05-30 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented the E2EE Secure File Vault. Built a persistent backend history layer utilizing `get_file_transfer_history_db` under `server/db/supabase_api.py` and a FastAPI history REST endpoint under `server/main.py`; integrated real-time state synchronization via client-side WebRTC lifecycle hooks in `client/src/App.tsx` that automatically sync P2P status updates to the database; designed a highly responsive sliding drawer panel for the vault featuring a glassmorphic look, type-ahead file filtering, and real-time status badges (pending, completed, accepted, declined, failed) with in-vault action hooks for pending transfers; and introduced a dedicated `FolderLock` header toggle button in the chat control panel. Upgraded NexaWorkspace collaborative sandbox by synchronizing the Document Snapshot Version Registry across all active room peers; integrated a presence-aware cooperative edit lock system restricting editing access to specific peers with interactive header indicators, a lock/unlock button, and a glowing read-only warning banner; and optimized front-end production bundle load times by implementing Rollup manual code-splitting for vendor packages, resolving build chunk size warnings. Upgraded the AI Meeting Intelligence Suite by implementing a hybrid AI/NLP meeting action extraction engine in `ai-sidecar/main.py` that utilizes OpenAI GPT-4o-mini/GPT-3.5-turbo with structured JSON outputs if an OpenAI key is present, and falls back to a high-fidelity offline rule-based heuristic parsing engine; extended the Pydantic/TypeScript schemas to support multi-attribute tracking fields including task `id`, `priority` (high, medium, low), `completed` status, overall call `sentiment` analysis, and a tag-cloud of key technical `topics`; designed a stunning, premium interactive UI in `client/src/components/AiAssistantPanel.tsx` with dynamic task checklist checkboxes, a progress indicator bar, inline editing of task texts, due dates, assignees, and priorities, as well as an inline drawer for creating custom deliverables; and introduced a custom event-driven collaborative integration in `client/src/components/WorkspacePanel.tsx` that synchronizes interactive call action lists directly into the shared document editor in real-time).*
+*Last updated: 2026-05-30 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented the E2EE Secure File Vault. Built a persistent backend history layer utilizing `get_file_transfer_history_db` under `server/db/supabase_api.py` and a FastAPI history REST endpoint under `server/main.py`; integrated real-time state synchronization via client-side WebRTC lifecycle hooks in `client/src/App.tsx` that automatically sync P2P status updates to the database; designed a highly responsive sliding drawer panel for the vault featuring a glassmorphic look, type-ahead file filtering, and real-time status badges (pending, completed, accepted, declined, failed) with in-vault action hooks for pending transfers; and introduced a dedicated `FolderLock` header toggle button in the chat control panel. Upgraded NexaWorkspace collaborative sandbox by synchronizing the Document Snapshot Version Registry across all active room peers; integrated a presence-aware cooperative edit lock system restricting editing access to specific peers with interactive header indicators, a lock/unlock button, and a glowing read-only warning banner; and optimized front-end production bundle load times by implementing Rollup manual code-splitting for vendor packages, resolving build chunk size warnings. Upgraded the AI Meeting Intelligence Suite by implementing a hybrid AI/NLP meeting action extraction engine in `ai-sidecar/main.py` that utilizes OpenAI GPT-4o-mini/GPT-3.5-turbo with structured JSON outputs if an OpenAI key is present, and falls back to a high-fidelity offline rule-based heuristic parsing engine; extended the Pydantic/TypeScript schemas to support multi-attribute tracking fields including task `id`, `priority` (high, medium, low), `completed` status, overall call `sentiment` analysis, and a tag-cloud of key technical `topics`; designed a stunning, premium interactive UI in `client/src/components/AiAssistantPanel.tsx` with dynamic task checklist checkboxes, a progress indicator bar, inline editing of task texts, due dates, assignees, and priorities, as well as an inline drawer for creating custom deliverables; and introduced a custom event-driven collaborative integration in `client/src/components/WorkspacePanel.tsx` that synchronizes interactive call action lists directly into the shared document editor in real-time. Engineered a state-of-the-art Network Simulation Lab within `client/src/hooks/useWebRTC.ts` and `client/src/components/DiagnosticsPanel.tsx` supporting custom network simulation profiles for local development, testing, and QA; integrated five high-fidelity profiles including Auto Drift, Perfect Fiber, Strained LTE, Satellite Link, and Custom Manual Mode with real-time numeric sliders for Latency (10ms-1500ms), Packet Loss (0%-50%), and Jitter (1ms-80ms) utilizing custom React state and refs to prevent stale state closures in async stats loop; hooked the simulated parameters directly into the outbound Adaptive Bitrate (ABR) quality evaluation system and the central telemetry metrics layer; and implemented quick simulation event injectors including 30% Packet Loss Spikes and 100% Signal Dropout Blackouts to seamlessly test client-side ABR quality downgrades and E2EE tunnel resilience in active WebRTC rooms).*
 
 

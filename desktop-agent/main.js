@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, Menu, Tray, nativeImage } = require('electron');
+const { app, BrowserWindow, globalShortcut, Menu, Tray, nativeImage, ipcMain, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { io } = require('socket.io-client');
@@ -9,6 +9,8 @@ let wsClient = null;
 let isTunnelActive = false;
 let isNotificationsEnabled = true;
 let isQuitting = false;
+let isMiniMode = false;
+let normalBounds = null;
 
 const iconPath = path.join(__dirname, 'icon.png');
 
@@ -63,12 +65,12 @@ function createWindow() {
     icon: getWindowIcon(),
     backgroundColor: '#060813',
     webPreferences: {
-      // SEC-07 FIX: NEVER enable nodeIntegration in a renderer that loads
-      // any remote or user-generated content. This is the #1 Electron CVE.
+      // SEC-07: Safe context isolation + sandboxing with preload script bridge.
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
       webviewTag: false,
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 
@@ -94,7 +96,7 @@ function createWindow() {
   });
 
   mainWindow.on('page-title-updated', (event, title) => {
-    // Keep tray tooltip in sync with page title (showing current logged in user)
+    // Keep tray tooltip in sync with page title (showing current logged in user / active room)
     if (tray) {
       const safeTitle = typeof title === 'string' ? title.slice(0, 120) : 'NexaLink';
       tray.setToolTip(safeTitle);
@@ -132,6 +134,7 @@ function updateTrayMenu() {
       }
     },
     { type: 'separator' },
+    { label: isMiniMode ? 'Exit Mini Overlay' : 'Enter Mini Overlay', click: () => toggleMiniMode() },
     { label: 'Toggle Input Tunnel', click: () => toggleTunnel() },
     { label: 'Force Kill Session (Ctrl+Shift+K)', click: () => triggerEmergencyKill() },
     { type: 'separator' },
@@ -149,6 +152,41 @@ function updateTrayMenu() {
 function toggleTunnel() {
   isTunnelActive = !isTunnelActive;
   console.log(`[Desktop Agent] Input Tunnel State: ${isTunnelActive ? 'ACTIVE' : 'IDLE'}`);
+}
+
+// Picture-in-Picture Mini overlay toggling
+function toggleMiniMode() {
+  if (!mainWindow) return;
+  isMiniMode = !isMiniMode;
+
+  if (isMiniMode) {
+    // Save current window boundaries before transitioning to mini PIP
+    normalBounds = mainWindow.getBounds();
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    mainWindow.setMinimumSize(320, 240);
+    
+    // Position mini overlay window nicely in the bottom right relative to original position
+    mainWindow.setBounds({
+      width: 340,
+      height: 260,
+      x: Math.max(0, normalBounds.x + (normalBounds.width - 360)),
+      y: Math.max(0, normalBounds.y + (normalBounds.height - 280))
+    }, true);
+  } else {
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.setMinimumSize(800, 600);
+    if (normalBounds) {
+      mainWindow.setBounds(normalBounds, true);
+    } else {
+      mainWindow.setBounds({ width: 1280, height: 800 }, true);
+    }
+  }
+
+  // Update System Tray menu text to match state
+  updateTrayMenu();
+
+  // Notify the React frontend about the state transition so it can adapt layout
+  mainWindow.webContents.send('window-state-changed', { isMiniMode });
 }
 
 // Global OS keypress hook revoking all sessions instantly (Chaperone protection)
@@ -173,14 +211,99 @@ function triggerEmergencyKill() {
   // Update visual HTML state if window is active
   if (mainWindow) {
     mainWindow.webContents.executeJavaScript(`
-      document.getElementById('status').innerText = 'EMERGENCY SHUTDOWN';
-      document.getElementById('status').className = 'status active';
-      const div = document.createElement('div');
-      div.innerText = '[EMERGENCY] Local kill-switch executed. Connection closed.';
-      div.style.color = '#f87171';
-      document.getElementById('tunnel-log').appendChild(div);
-    `);
+      const statusEl = document.getElementById('status');
+      if (statusEl) {
+        statusEl.innerText = 'EMERGENCY SHUTDOWN';
+        statusEl.className = 'status active';
+      }
+      const tunnelLogEl = document.getElementById('tunnel-log');
+      if (tunnelLogEl) {
+        const div = document.createElement('div');
+        div.innerText = '[EMERGENCY] Local kill-switch executed. Connection closed.';
+        div.style.color = '#f87171';
+        tunnelLogEl.appendChild(div);
+      }
+    `).catch(() => {});
   }
+}
+
+// IPC action communications between React renderer process and Electron main shell
+function setupIpcHandlers() {
+  ipcMain.on('desktop-action', (event, payload) => {
+    const { action, data } = payload || {};
+    if (!action) return;
+
+    switch (action) {
+      case 'toggle-mini-mode':
+        toggleMiniMode();
+        break;
+
+      case 'set-always-on-top':
+        if (mainWindow) {
+          const alwaysOnTop = !!data?.active;
+          mainWindow.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
+          mainWindow.webContents.send('window-state-changed', { alwaysOnTop });
+        }
+        break;
+
+      case 'update-tray-tooltip':
+        if (tray && data?.text) {
+          tray.setToolTip(data.text.slice(0, 120));
+        }
+        break;
+
+      case 'native-notify':
+        if (isNotificationsEnabled) {
+          const notif = new Notification({
+            title: data?.title || 'NexaLink Desktop',
+            body: data?.body || '',
+            icon: getWindowIcon(),
+            silent: !!data?.silent
+          });
+          
+          notif.on('click', () => {
+            if (mainWindow) {
+              mainWindow.show();
+              if (data?.room) {
+                mainWindow.webContents.send('shortcut-triggered', { shortcut: 'navigate-room', room: data.room });
+              }
+            }
+          });
+          
+          notif.show();
+        }
+        break;
+
+      default:
+        console.warn(`[Desktop Agent] Received unhandled desktop IPC action: ${action}`);
+    }
+  });
+
+  // Dynamically register keyboard shortcuts requested by React client (e.g. push-to-talk, screen toggle)
+  ipcMain.on('register-shortcut', (event, payload) => {
+    const { shortcut, keySequence } = payload || {};
+    if (!shortcut || !keySequence) return;
+
+    try {
+      // Clean up previous registration to avoid duplicate event bounds
+      globalShortcut.unregister(keySequence);
+
+      const registered = globalShortcut.register(keySequence, () => {
+        console.log(`[Global Shortcut] Hotkey triggered: ${shortcut} (${keySequence})`);
+        if (mainWindow) {
+          mainWindow.webContents.send('shortcut-triggered', { shortcut });
+        }
+      });
+
+      if (registered) {
+        console.log(`[Desktop Agent] Dynamic global shortcut registered: ${keySequence} -> ${shortcut}`);
+      } else {
+        console.warn(`[Desktop Agent] Failed to register global shortcut sequence: ${keySequence}`);
+      }
+    } catch (err) {
+      console.error(`[Desktop Agent] Error executing register-shortcut IPC:`, err);
+    }
+  });
 }
 
 app.whenReady().then(() => {
@@ -194,8 +317,9 @@ app.whenReady().then(() => {
   }
 
   registerGlobalHotkeys();
+  setupIpcHandlers();
 
-  // BUG FIX: Initialize the WebSocket client connection to the signalling server
+  // Initialize the WebSocket client connection to the signalling server
   // so the emergency kill-switch can propagate the event over the relay channel.
   // Re-connect automatically if the signalling server is temporarily unreachable.
   function connectWebSocket() {

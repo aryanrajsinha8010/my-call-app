@@ -153,15 +153,33 @@ export function useNotifications() {
 
   /* ── 3. In-tab fallback (fires when the browser IS open but tab is hidden) ─ */
   const notify = useCallback((type: NotifType, opts: NexaNotifOptions) => {
-    if (!('Notification' in window)) return;
-    if (Notification.permission !== 'granted') return;
-    // Only show in-tab notification when not focused (server push handles the rest)
-    if (document.visibilityState === 'visible' && document.hasFocus()) return;
-
     const isCall = type === 'session';
     const title = isCall ? `📞 ${opts.sender} is calling` : `💬 Message from ${opts.sender}`;
     const body  = opts.body ?? (isCall ? 'NexaLink requesting an active session' : 'NexaLink received an update');
     const tag   = opts.tag ?? `nexalink-${type}`;
+
+    // Check if running in Electron with nexalinkDesktop exposed
+    if (typeof window !== 'undefined' && (window as any).nexalinkDesktop) {
+      try {
+        (window as any).nexalinkDesktop.sendAction('desktop-action', {
+          action: 'native-notify',
+          data: {
+            title,
+            body,
+            silent: false,
+            room: opts.room ?? '',
+          }
+        });
+        return;
+      } catch (err) {
+        console.warn('[Notifications] Electron native notification relay failed:', err);
+      }
+    }
+
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    // Only show in-tab notification when not focused (server push handles the rest)
+    if (document.visibilityState === 'visible' && document.hasFocus()) return;
 
     // Use SW showNotification if available (so actions work), otherwise fallback
     if (swRegRef.current) {

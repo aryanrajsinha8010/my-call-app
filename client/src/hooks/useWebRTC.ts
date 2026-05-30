@@ -45,6 +45,15 @@ type AliasProfile = {
   bio: string;
 };
 
+export type SimulatedNetworkProfile = 'auto-drift' | 'fiber' | 'lte' | 'satellite' | 'custom';
+
+export interface CustomSimSettings {
+  latency: number;
+  packetLoss: number;
+  jitter: number;
+}
+
+
 export function useWebRTC(
   roomName: string,
   defaultName: string,
@@ -99,6 +108,29 @@ export function useWebRTC(
 
   const [qualityPreference, setQualityPreference] = useState<'auto' | 'hd' | 'sd' | 'low' | 'audio-only'>('auto');
   const [currentQualityProfile, setCurrentQualityProfile] = useState<'hd' | 'sd' | 'low' | 'audio-only'>('hd');
+
+  const [simulatedProfile, setSimulatedProfile] = useState<SimulatedNetworkProfile>('auto-drift');
+  const [customSimSettings, setCustomSimSettings] = useState<CustomSimSettings>({
+    latency: 50,
+    packetLoss: 0,
+    jitter: 3,
+  });
+
+  const simulatedProfileRef = useRef<SimulatedNetworkProfile>('auto-drift');
+  const customSimSettingsRef = useRef<CustomSimSettings>({
+    latency: 50,
+    packetLoss: 0,
+    jitter: 3,
+  });
+
+  useEffect(() => {
+    simulatedProfileRef.current = simulatedProfile;
+  }, [simulatedProfile]);
+
+  useEffect(() => {
+    customSimSettingsRef.current = customSimSettings;
+  }, [customSimSettings]);
+
 
   const consecutiveDegradationRef = useRef<number>(0);
   const consecutiveRecoveryRef = useRef<number>(0);
@@ -715,12 +747,41 @@ export function useWebRTC(
     const interval = setInterval(async () => {
       const pcs = Object.values(peerConnectionsRef.current);
       
-      // Let's create realistic periodic drift or fluctuations to show ABR in action!
-      const timeSec = Math.floor(Date.now() / 1000);
-      const isSimulatedDegraded = (timeSec % 60) > 40; // Degrade for 20 seconds out of every 60 seconds
-      const simulatedLoss = isSimulatedDegraded ? Math.floor(8 + Math.random() * 15) : (Math.random() > 0.95 ? 2 : 0);
-      const simulatedLatency = isSimulatedDegraded ? Math.floor(220 + Math.random() * 120) : Math.floor(35 + Math.random() * 20);
-      const simulatedJitter = isSimulatedDegraded ? Math.floor(25 + Math.random() * 15) : Math.floor(2 + Math.random() * 4);
+      // Read simulation parameters from refs to avoid stale closure
+      const currentSimProfile = simulatedProfileRef.current;
+      const currentCustomSettings = customSimSettingsRef.current;
+
+      let simulatedLoss = 0;
+      let simulatedLatency = 30;
+      let simulatedJitter = 2.0;
+
+      if (currentSimProfile === 'auto-drift') {
+        const timeSec = Math.floor(Date.now() / 1000);
+        const isSimulatedDegraded = (timeSec % 60) > 40; // Degrade for 20 seconds out of every 60 seconds
+        simulatedLoss = isSimulatedDegraded ? Math.floor(8 + Math.random() * 15) : (Math.random() > 0.95 ? 2 : 0);
+        simulatedLatency = isSimulatedDegraded ? Math.floor(220 + Math.random() * 120) : Math.floor(35 + Math.random() * 20);
+        simulatedJitter = isSimulatedDegraded ? Math.floor(25 + Math.random() * 15) : Math.floor(2 + Math.random() * 4);
+      } else if (currentSimProfile === 'fiber') {
+        simulatedLoss = 0;
+        simulatedLatency = Math.floor(12 + Math.random() * 8);
+        simulatedJitter = Math.floor(1 + Math.random() * 2);
+      } else if (currentSimProfile === 'lte') {
+        simulatedLoss = Math.floor(2 + Math.random() * 4);
+        simulatedLatency = Math.floor(80 + Math.random() * 50);
+        simulatedJitter = Math.floor(12 + Math.random() * 12);
+      } else if (currentSimProfile === 'satellite') {
+        simulatedLoss = Math.floor(15 + Math.random() * 15);
+        simulatedLatency = Math.floor(550 + Math.random() * 300);
+        simulatedJitter = Math.floor(50 + Math.random() * 60);
+      } else if (currentSimProfile === 'custom') {
+        const lossVariance = currentCustomSettings.packetLoss > 0 ? (Math.random() * 2 - 1) : 0;
+        const latencyVariance = Math.random() * 10 - 5;
+        const jitterVariance = Math.random() * 2 - 1;
+
+        simulatedLoss = Math.max(0, Math.round(currentCustomSettings.packetLoss + lossVariance));
+        simulatedLatency = Math.max(5, Math.round(currentCustomSettings.latency + latencyVariance));
+        simulatedJitter = Math.max(0.5, Math.round((currentCustomSettings.jitter + jitterVariance) * 10) / 10);
+      }
 
       if (pcs.length === 0) {
         // Fallback to safe simulated baseline if no peer is connected yet
@@ -854,16 +915,26 @@ export function useWebRTC(
           ? Math.round((totalPacketsLost / (totalPacketsReceived + totalPacketsLost)) * 100)
           : 0;
 
+        let finalLoss = packetLossCalc;
+        let finalLatency = Math.round(totalVideoLatency / pcCount) || 35;
+        let finalJitter = Math.round((totalJitter / pcCount) * 10) / 10 || 2.2;
+
+        if (currentSimProfile !== 'auto-drift') {
+          finalLoss = simulatedLoss;
+          finalLatency = simulatedLatency;
+          finalJitter = simulatedJitter;
+        }
+
         const calculatedStats = {
-          videoLatency: Math.round(totalVideoLatency / pcCount) || 35, // default fallback
-          audioLatency: Math.round(totalAudioLatency / pcCount) || 15,
-          packetLoss: packetLossCalc,
-          jitter: Math.round((totalJitter / pcCount) * 10) / 10 || 2.2,
+          videoLatency: finalLatency,
+          audioLatency: Math.floor(finalLatency * 0.6),
+          packetLoss: finalLoss,
+          jitter: finalJitter,
           bytesSent: totalBytesSent,
           bytesReceived: totalBytesReceived,
           bitrateSent,
           bitrateReceived,
-          videoFps: videoFps || 30,
+          videoFps: videoFps || (finalLoss > 12 ? 10 : 30),
           audioCodec: audioCodec.replace('audio/', '') || 'opus',
           videoCodec: videoCodec.replace('video/', '') || 'VP8',
           localCandidateType: localCandidateType || 'host/relay',
@@ -872,8 +943,8 @@ export function useWebRTC(
         };
         setStats(calculatedStats);
 
-        // Run ABR on real stats
-        runABRDecision(packetLossCalc, calculatedStats.videoLatency, calculatedStats.jitter);
+        // Run ABR on stats
+        runABRDecision(finalLoss, finalLatency, finalJitter);
       } else {
         // Fallback simulated block
         setStats({
@@ -885,7 +956,7 @@ export function useWebRTC(
           bytesReceived: 0,
           bitrateSent: 0,
           bitrateReceived: 0,
-          videoFps: simulatedLoss > 12 ? 12 : 30,
+          videoFps: simulatedLoss > 12 ? 10 : 30,
           audioCodec: 'opus',
           videoCodec: 'VP8',
           localCandidateType: 'host/relay',
@@ -1026,6 +1097,11 @@ export function useWebRTC(
     qualityPreference,
     setQualityPreference,
     currentQualityProfile,
+    // Simulation Lab
+    simulatedProfile,
+    setSimulatedProfile,
+    customSimSettings,
+    setCustomSimSettings,
     // Actions
     initMedia,
     toggleVideo,

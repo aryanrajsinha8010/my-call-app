@@ -368,6 +368,11 @@ export default function App() {
   const [tileOrder, setTileOrder] = useState<string[]>([]);
   const [dragOverTileId, setDragOverTileId] = useState<string | null>(null);
 
+  // ── Desktop Agent Integration States ──
+  const [isMiniMode, setIsMiniMode] = useState(false);
+  const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false);
+  const backupLayoutRef = useRef<'auto' | 'pip-remote' | 'pip-local' | 'equal' | 'three' | 'horizontal'>('auto');
+
   /* AI Captions & Meeting Intelligence States */
   const [liveCaptionsEnabled, setLiveCaptionsEnabled] = useState(false);
   const [captionsLanguage, setCaptionsLanguage] = useState('en-US');
@@ -2542,6 +2547,7 @@ export default function App() {
     initMedia, toggleVideo, toggleAudio, toggleScreenShare,
     toggleAlias, requestRemoteControl, respondToControlRequest, triggerEmergencyKill,
     qualityPreference, setQualityPreference, currentQualityProfile,
+    simulatedProfile, setSimulatedProfile, customSimSettings, setCustomSimSettings,
   } = useWebRTC(
     inRoom ? roomName : '', 
     userName, 
@@ -2563,6 +2569,87 @@ export default function App() {
     else stopPipeline();
     return () => stopPipeline();
   }, [inRoom, localStream, startPipeline, stopPipeline]);
+
+  // ── Desktop Agent Integration ──
+  useEffect(() => {
+    if (typeof window === 'undefined' || !(window as any).nexalinkDesktop) return;
+    const desktop = (window as any).nexalinkDesktop;
+
+    // Listen for window state changes (isMiniMode, alwaysOnTop) from Electron main
+    const unsubscribeState = desktop.onEvent('window-state-changed', (data: any) => {
+      console.log('[Desktop Integration] window-state-changed event received:', data);
+      if (typeof data.isMiniMode !== 'undefined') {
+        setIsMiniMode(data.isMiniMode);
+        if (data.isMiniMode) {
+          // Entering Mini Mode: backup current layout, switch to pip-remote
+          setStreamLayout(current => {
+            if (current !== 'pip-remote') {
+              backupLayoutRef.current = current;
+            }
+            return 'pip-remote';
+          });
+        } else {
+          // Exiting Mini Mode: restore previous layout
+          setStreamLayout(backupLayoutRef.current);
+        }
+      }
+      if (typeof data.alwaysOnTop !== 'undefined') {
+        setIsAlwaysOnTop(data.alwaysOnTop);
+      }
+    });
+
+    // Listen for dynamic global hotkey trigger notifications from Electron main
+    const unsubscribeShortcut = desktop.onEvent('shortcut-triggered', (data: any) => {
+      console.log('[Desktop Integration] shortcut-triggered event received:', data);
+      if (!data?.shortcut) return;
+
+      switch (data.shortcut) {
+        case 'toggle-mute':
+          toggleAudio();
+          break;
+        case 'toggle-video':
+          toggleVideo();
+          break;
+        case 'toggle-mini':
+          desktop.sendAction('desktop-action', { action: 'toggle-mini-mode' });
+          break;
+        case 'navigate-room':
+          if (data.room) {
+            connectToRoom(data.room, `Joining room from shortcut...`);
+          }
+          break;
+        default:
+          console.warn(`[Desktop Integration] Unhandled shortcut trigger: ${data.shortcut}`);
+      }
+    });
+
+    // Automatically register default global hotkeys on startup
+    desktop.sendAction('register-shortcut', {
+      shortcut: 'toggle-mute',
+      keySequence: 'CommandOrControl+Alt+M',
+    });
+    desktop.sendAction('register-shortcut', {
+      shortcut: 'toggle-video',
+      keySequence: 'CommandOrControl+Alt+V',
+    });
+    desktop.sendAction('register-shortcut', {
+      shortcut: 'toggle-mini',
+      keySequence: 'CommandOrControl+Alt+P',
+    });
+
+    // Inform the main process of current user/room if already present
+    if (inRoom && roomName) {
+      desktop.sendAction('desktop-action', {
+        action: 'update-tray-tooltip',
+        data: { text: `NexaLink - Room: ${roomName}` }
+      });
+    }
+
+    return () => {
+      unsubscribeState();
+      unsubscribeShortcut();
+    };
+  }, [inRoom, roomName, toggleAudio, toggleVideo, connectToRoom]);
 
   /* ── AI CLOSED CAPTIONING & INTELLIGENCE CORE ── */
   const recognitionRef = useRef<any>(null);
@@ -6194,6 +6281,46 @@ export default function App() {
                   ))}
                 </div>
 
+                {isElectron && (
+                  <div className="flex items-center gap-1 rounded-xl p-1" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}>
+                    <button
+                      onClick={() => {
+                        if ((window as any).nexalinkDesktop) {
+                          (window as any).nexalinkDesktop.sendAction('desktop-action', { action: 'toggle-mini-mode' });
+                        }
+                      }}
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-150 nx-tooltip`}
+                      style={isMiniMode
+                        ? { background: 'var(--nx-primary)', color: '#fff', boxShadow: '0 2px 8px rgba(209,110,71,0.35)' }
+                        : { color: 'var(--nx-muted)' }
+                      }
+                      title={isMiniMode ? "Exit Mini Overlay" : "Enter Mini Overlay"}
+                      data-tip={isMiniMode ? "Exit Mini Overlay" : "Enter Mini Overlay"}
+                    >
+                      <PictureInPicture2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if ((window as any).nexalinkDesktop) {
+                          (window as any).nexalinkDesktop.sendAction('desktop-action', {
+                            action: 'set-always-on-top',
+                            data: { active: !isAlwaysOnTop }
+                          });
+                        }
+                      }}
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-150 nx-tooltip`}
+                      style={isAlwaysOnTop
+                        ? { background: 'var(--nx-primary)', color: '#fff', boxShadow: '0 2px 8px rgba(209,110,71,0.35)' }
+                        : { color: 'var(--nx-muted)' }
+                      }
+                      title={isAlwaysOnTop ? "Disable Always on Top" : "Enable Always on Top"}
+                      data-tip={isAlwaysOnTop ? "Disable Always on Top" : "Enable Always on Top"}
+                    >
+                      <Pin className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex flex-wrap items-center gap-2">
                   <button onClick={() => setFitMode(mode => mode === 'cover' ? 'contain' : 'cover')}
                     className="nx-btn nx-btn-ghost text-2xs py-2 px-3">
@@ -7432,6 +7559,13 @@ export default function App() {
                     participantsCount={participants.length}
                     controlLogs={controlLogs}
                     roomName={roomName}
+                    simulatedProfile={simulatedProfile}
+                    setSimulatedProfile={setSimulatedProfile}
+                    customSimSettings={customSimSettings}
+                    setCustomSimSettings={setCustomSimSettings}
+                    qualityPreference={qualityPreference}
+                    setQualityPreference={setQualityPreference}
+                    currentQualityProfile={currentQualityProfile}
                   />
                 )}
 
