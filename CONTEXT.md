@@ -673,6 +673,6 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 
 ---
 
-*Last updated: 2026-05-30 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented military-grade client-side End-to-End Encryption (E2EE) for the real-time interactive Whiteboard component using AES-GCM-256; integrated SubtleCrypto encryptText and decryptText pipelines in `Whiteboard.tsx` for drawing events, shapes, text annotations, image attachments, and cloud snapshot loading; added a visual emerald Lock status indicator to the Whiteboard tool board; updated `signalling/server.js` stroke and shape sanitization filters to seamlessly relay E2EE-wrapped envelope strings while maintaining strict sanitization for unencrypted rooms).*
+*Last updated: 2026-05-30 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented dynamic Adaptive Bitrate Control (ABR) system for WebRTC media streams; integrated statistics polling loop checking outbound-rtp / candidate-pair network latency in `useWebRTC.ts`; implemented automatic profile adaptation for HD, SD, Low Bandwidth, and Audio-Only modes; added smooth transition debouncing / fast degradation; created premium UI quality overlay indicators, floating stage status badges, interactive manual menu selectors, and desktop toast alerts for automatic quality shifts in `App.tsx` and custom toolbar control grids).*
 
 

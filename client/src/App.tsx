@@ -3,7 +3,7 @@ import {
   Video, VideoOff, Mic, MicOff, Monitor, MonitorOff, ShieldCheck,
   Users, MessageSquare, Radio,
   Eye, EyeOff, Sliders, Play, Lock, ShieldAlert,
-  Zap, Edit2, Send, X, PhoneOff, WifiOff,
+  Zap, Edit2, Send, X, PhoneOff, WifiOff, Wifi,
   BarChart2, Activity, Hash, LogOut,
   AlertTriangle, Headphones, Copy, PhoneCall,
   LayoutGrid, LayoutPanelLeft, LayoutPanelTop, PictureInPicture2, Columns2, Columns3, Paperclip,
@@ -350,6 +350,7 @@ export default function App() {
     return initial.view;
   });
   const [activeTab, setActiveTab] = useState<Tab>('audio');
+  const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [fitMode, setFitMode] = useState<'cover' | 'contain'>('cover');
   const [pinnedTile, setPinnedTile] = useState<string | null>(null);
@@ -2397,6 +2398,7 @@ export default function App() {
     pendingControlRequestFrom, pendingControlRequestType, controlLogs,
     initMedia, toggleVideo, toggleAudio, toggleScreenShare,
     toggleAlias, requestRemoteControl, respondToControlRequest, triggerEmergencyKill,
+    qualityPreference, setQualityPreference, currentQualityProfile,
   } = useWebRTC(
     inRoom ? roomName : '', 
     userName, 
@@ -2418,6 +2420,34 @@ export default function App() {
     else stopPipeline();
     return () => stopPipeline();
   }, [inRoom, localStream, startPipeline, stopPipeline]);
+
+  // Dynamic Quality Transition Toast Notifications
+  const prevQualityProfileRef = useRef<string>('hd');
+  useEffect(() => {
+    if (inRoom && currentQualityProfile && currentQualityProfile !== prevQualityProfileRef.current) {
+      const isDowngrade = 
+        (prevQualityProfileRef.current === 'hd' && currentQualityProfile !== 'hd') ||
+        (prevQualityProfileRef.current === 'sd' && currentQualityProfile === 'low') ||
+        (prevQualityProfileRef.current === 'sd' && currentQualityProfile === 'audio-only') ||
+        (prevQualityProfileRef.current === 'low' && currentQualityProfile === 'audio-only');
+        
+      const levelNames: Record<string, string> = {
+        'hd': 'High Definition (720p/1080p)',
+        'sd': 'Standard Definition (480p)',
+        'low': 'Low Bandwidth (240p)',
+        'audio-only': 'Audio Only (Bandwidth Exhausted)',
+      };
+      
+      const msg = isDowngrade
+        ? `📉 Connection adapted: video downgraded to ${levelNames[currentQualityProfile] || currentQualityProfile} to preserve audio stability.`
+        : `🚀 Connection recovered: video upgraded to ${levelNames[currentQualityProfile] || currentQualityProfile}.`;
+        
+      showToast(msg, isDowngrade ? 'error' : 'success');
+      prevQualityProfileRef.current = currentQualityProfile;
+    } else if (!inRoom) {
+      prevQualityProfileRef.current = 'hd';
+    }
+  }, [currentQualityProfile, inRoom, showToast]);
 
   // ── PRESENCE REGISTRATION & INCOMING CALL LISTENER ────────────────────────
   // Placed here so `socket` (from useWebRTC above) is in scope.
@@ -5391,9 +5421,38 @@ export default function App() {
 
               {/* ── TOPBAR ── */}
               <div className="call-topbar flex flex-wrap items-center justify-between gap-3 px-3 py-2 rounded-2xl">
-                <div className="min-w-0">
-                  <p className="text-sm font-bold text-slate-950 truncate">{roomName}</p>
-                  <p className="text-3xs text-slate-500">{participants.length + 1} participants · {isConnected ? 'secure relay live' : 'reconnecting'}</p>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-slate-950 truncate">{roomName}</p>
+                      
+                      {/* Premium Dynamic ABR Quality Status Badge */}
+                      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold border transition-all duration-300 ${
+                        currentQualityProfile === 'hd'
+                          ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                          : currentQualityProfile === 'sd'
+                          ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                          : currentQualityProfile === 'low'
+                          ? 'text-orange-400 bg-orange-500/10 border-orange-500/20'
+                          : 'text-rose-400 bg-rose-500/10 border-rose-500/20 animate-pulse'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          currentQualityProfile === 'hd'
+                            ? 'bg-emerald-400'
+                            : currentQualityProfile === 'sd'
+                            ? 'bg-amber-400'
+                            : currentQualityProfile === 'low'
+                            ? 'bg-orange-400'
+                            : 'bg-rose-400'
+                        }`} />
+                        <span className="uppercase tracking-wider font-mono font-black">{currentQualityProfile}</span>
+                        {qualityPreference === 'auto' && (
+                          <span className="text-[8px] opacity-75 font-normal">Auto</span>
+                        )}
+                      </span>
+                    </div>
+                    <p className="text-3xs text-slate-500">{participants.length + 1} participants · {isConnected ? 'secure relay live' : 'reconnecting'}</p>
+                  </div>
                 </div>
 
                 {/* ── Layout picker ── */}
@@ -5806,6 +5865,115 @@ export default function App() {
                   data-tip={isPipActive ? 'Exit Floating PiP' : 'Float Video (PiP)'}>
                   <PictureInPicture2 className="w-4 h-4" />
                 </button>
+
+                {/* Call Quality ABR Controls */}
+                <div className="relative">
+                  <button 
+                    onClick={() => setIsQualityMenuOpen(!isQualityMenuOpen)}
+                    className={`nx-btn-icon nx-tooltip relative ${isQualityMenuOpen || qualityPreference !== 'auto' ? 'active' : ''}`}
+                    data-tip={`Quality: ${qualityPreference.toUpperCase()}`}>
+                    <Wifi className="w-4 h-4" />
+                    {qualityPreference === 'auto' && (
+                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-emerald-400 border border-slate-900 rounded-full animate-pulse" />
+                    )}
+                  </button>
+                  
+                  {isQualityMenuOpen && (
+                    <>
+                      {/* Backdrop cover to click-away-dismiss */}
+                      <div 
+                        className="fixed inset-0 z-40 cursor-default" 
+                        onClick={() => setIsQualityMenuOpen(false)} 
+                      />
+                      
+                      {/* Dropdown panel */}
+                      <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-50 bg-slate-950/95 backdrop-blur-xl border border-white/10 p-3 rounded-2xl shadow-2xl flex flex-col gap-2 min-w-[200px] animate-in fade-in slide-in-from-bottom-3 duration-200">
+                        <div className="px-2 py-1 border-b border-white/5 flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Stream Quality</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 font-mono font-bold text-indigo-400 uppercase">
+                            {currentQualityProfile} Active
+                          </span>
+                        </div>
+
+                        <button 
+                          onClick={() => { setQualityPreference('auto'); setIsQualityMenuOpen(false); }}
+                          className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-medium transition-all ${
+                            qualityPreference === 'auto' 
+                              ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-200' 
+                              : 'hover:bg-white/5 border border-transparent text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <span className="flex flex-col">
+                            <span className="font-bold flex items-center gap-1">🚀 Auto (Adaptive)</span>
+                            <span className="text-[9px] opacity-60">Scales based on connection RTT</span>
+                          </span>
+                          {qualityPreference === 'auto' && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+                        </button>
+
+                        <button 
+                          onClick={() => { setQualityPreference('hd'); setIsQualityMenuOpen(false); }}
+                          className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-medium transition-all ${
+                            qualityPreference === 'hd' 
+                              ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-200' 
+                              : 'hover:bg-white/5 border border-transparent text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <span className="flex flex-col">
+                            <span className="font-bold">🎬 HD Quality</span>
+                            <span className="text-[9px] opacity-60">1080p/720p @ 2.5 Mbps</span>
+                          </span>
+                          {qualityPreference === 'hd' && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />}
+                        </button>
+
+                        <button 
+                          onClick={() => { setQualityPreference('sd'); setIsQualityMenuOpen(false); }}
+                          className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-medium transition-all ${
+                            qualityPreference === 'sd' 
+                              ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-200' 
+                              : 'hover:bg-white/5 border border-transparent text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <span className="flex flex-col">
+                            <span className="font-bold">📺 SD Quality</span>
+                            <span className="text-[9px] opacity-60">480p @ 800 kbps</span>
+                          </span>
+                          {qualityPreference === 'sd' && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
+                        </button>
+
+                        <button 
+                          onClick={() => { setQualityPreference('low'); setIsQualityMenuOpen(false); }}
+                          className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-medium transition-all ${
+                            qualityPreference === 'low' 
+                              ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-200' 
+                              : 'hover:bg-white/5 border border-transparent text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <span className="flex flex-col">
+                            <span className="font-bold">📱 Low Bandwidth</span>
+                            <span className="text-[9px] opacity-60">240p @ 200 kbps</span>
+                          </span>
+                          {qualityPreference === 'low' && <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />}
+                        </button>
+
+                        <button 
+                          onClick={() => { setQualityPreference('audio-only'); setIsQualityMenuOpen(false); }}
+                          className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-medium transition-all ${
+                            qualityPreference === 'audio-only' 
+                              ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-200' 
+                              : 'hover:bg-white/5 border border-transparent text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <span className="flex flex-col">
+                            <span className="font-bold">🔇 Audio Only</span>
+                            <span className="text-[9px] opacity-60">Mute transmission stream</span>
+                          </span>
+                          {qualityPreference === 'audio-only' && <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />}
+                        </button>
+
+                      </div>
+                    </>
+                  )}
+                </div>
                 <button onClick={() => setFitMode(mode => mode === 'cover' ? 'contain' : 'cover')}
                   className="nx-btn-icon nx-tooltip"
                   data-tip={fitMode === 'cover' ? 'Fit to Screen' : 'Fill Screen'}>
@@ -6578,6 +6746,115 @@ export default function App() {
               data-tip="Voice Settings">
               <Sliders className="w-4 h-4" />
             </button>
+
+            {/* Call Quality ABR Controls */}
+            <div className="relative">
+              <button 
+                onClick={() => setIsQualityMenuOpen(!isQualityMenuOpen)}
+                className={`nx-btn-icon nx-tooltip relative ${isQualityMenuOpen || qualityPreference !== 'auto' ? 'active' : ''}`}
+                data-tip={`Quality: ${qualityPreference.toUpperCase()}`}>
+                <Wifi className="w-4 h-4" />
+                {qualityPreference === 'auto' && (
+                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-emerald-400 border border-slate-900 rounded-full animate-pulse" />
+                )}
+              </button>
+              
+              {isQualityMenuOpen && (
+                <>
+                  {/* Backdrop cover to click-away-dismiss */}
+                  <div 
+                    className="fixed inset-0 z-40 cursor-default" 
+                    onClick={() => setIsQualityMenuOpen(false)} 
+                  />
+                  
+                  {/* Dropdown panel */}
+                  <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-50 bg-slate-950/95 backdrop-blur-xl border border-white/10 p-3 rounded-2xl shadow-2xl flex flex-col gap-2 min-w-[200px] animate-in fade-in slide-in-from-bottom-3 duration-200">
+                    <div className="px-2 py-1 border-b border-white/5 flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Stream Quality</span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 font-mono font-bold text-indigo-400 uppercase">
+                        {currentQualityProfile} Active
+                      </span>
+                    </div>
+
+                    <button 
+                      onClick={() => { setQualityPreference('auto'); setIsQualityMenuOpen(false); }}
+                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-medium transition-all ${
+                        qualityPreference === 'auto' 
+                          ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-200' 
+                          : 'hover:bg-white/5 border border-transparent text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span className="flex flex-col">
+                        <span className="font-bold flex items-center gap-1">🚀 Auto (Adaptive)</span>
+                        <span className="text-[9px] opacity-60">Scales based on connection RTT</span>
+                      </span>
+                      {qualityPreference === 'auto' && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+                    </button>
+
+                    <button 
+                      onClick={() => { setQualityPreference('hd'); setIsQualityMenuOpen(false); }}
+                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-medium transition-all ${
+                        qualityPreference === 'hd' 
+                          ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-200' 
+                          : 'hover:bg-white/5 border border-transparent text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span className="flex flex-col">
+                        <span className="font-bold">🎬 HD Quality</span>
+                        <span className="text-[9px] opacity-60">1080p/720p @ 2.5 Mbps</span>
+                      </span>
+                      {qualityPreference === 'hd' && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />}
+                    </button>
+
+                    <button 
+                      onClick={() => { setQualityPreference('sd'); setIsQualityMenuOpen(false); }}
+                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-medium transition-all ${
+                        qualityPreference === 'sd' 
+                          ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-200' 
+                          : 'hover:bg-white/5 border border-transparent text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span className="flex flex-col">
+                        <span className="font-bold">📺 SD Quality</span>
+                        <span className="text-[9px] opacity-60">480p @ 800 kbps</span>
+                      </span>
+                      {qualityPreference === 'sd' && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
+                    </button>
+
+                    <button 
+                      onClick={() => { setQualityPreference('low'); setIsQualityMenuOpen(false); }}
+                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-medium transition-all ${
+                        qualityPreference === 'low' 
+                          ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-200' 
+                          : 'hover:bg-white/5 border border-transparent text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span className="flex flex-col">
+                        <span className="font-bold">📱 Low Bandwidth</span>
+                        <span className="text-[9px] opacity-60">240p @ 200 kbps</span>
+                      </span>
+                      {qualityPreference === 'low' && <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />}
+                    </button>
+
+                    <button 
+                      onClick={() => { setQualityPreference('audio-only'); setIsQualityMenuOpen(false); }}
+                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-left text-xs font-medium transition-all ${
+                        qualityPreference === 'audio-only' 
+                          ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-200' 
+                          : 'hover:bg-white/5 border border-transparent text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span className="flex flex-col">
+                        <span className="font-bold">🔇 Audio Only</span>
+                        <span className="text-[9px] opacity-60">Mute transmission stream</span>
+                      </span>
+                      {qualityPreference === 'audio-only' && <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />}
+                    </button>
+
+                  </div>
+                </>
+              )}
+            </div>
 
             <button onClick={() => { setActiveTab('chat'); }}
               className={`nx-btn-icon nx-tooltip relative ${activeTab === 'chat' ? 'active' : ''}`}
