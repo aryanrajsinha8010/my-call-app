@@ -181,7 +181,7 @@ The entire front-end lives in **one file**: `e:\calls\client\src\App.tsx`.
 | `inboxNotifications` | `InboxItem[]` | Notification inbox (calls, msgs) |
 | `incomingCall` | `IncomingCallData \| null` | Incoming call modal data |
 | `chatMessages` | `ChatMessage[]` | Room chat messages (ephemeral) |
-| `activeTab` | `Tab` | Right panel tab in room view (`chat` \| `audio` \| `whiteboard` \| `control` \| `participants` \| `profile` \| `contacts` \| `diagnostics` \| `ai`) |
+| `activeTab` | `Tab` | Right panel tab in room view (`chat` \| `audio` \| `whiteboard` \| `workspace` \| `control` \| `participants` \| `profile` \| `contacts` \| `diagnostics` \| `ai`) |
 | `streamLayout` | `'auto' \| 'pip-remote' \| 'pip-local' \| 'equal' \| 'horizontal'` | Video layout |
 | `notifPermission` | `NotificationPermission` | OS push permission state |
 
@@ -226,26 +226,15 @@ pushSubscriptions // { [username]: PushSubscription } — Web Push subs
 | `tts_message` | `{ roomName, sender, text, voice }` | TTS relay |
 | `draw_event` | `{ roomName, strokeData }` | Whiteboard line draw event |
 | `shape_event` | `{ roomName, shapeData }` | Whiteboard shape draw event (rectangle, circle, line, arrow) |
-| `text_event` | `{ roomName, textData }` | Whiteboard text annotation event |
-| `image_event` | `{ roomName, imageData }` | Whiteboard image annotation event |
-| `clear_whiteboard` | `{ roomName }` | Clear whiteboard |
-| `load_whiteboard` | `{ roomName, url }` | Load whiteboard snapshot |
-| `screen_share_start` | `{ roomName }` | Announce screen share started |
-| `screen_share_stop` | `{ roomName }` | Announce screen share stopped |
-| `update_alias` | `{ userAlias }` | Update display name/avatar |
-| `remote_control_request` | `{ targetSocketId, requesterName, accessType }` | Request control |
-| `remote_control_grant` | `{ requesterSocketId, accessType }` | Grant control |
-| `remote_control_revoke` | `{ targetSocketId }` | Revoke control |
-| `remote_input` | `{ targetSocketId, inputType, data }` | Send mouse/keyboard events |
-| `call_invite` | `{ targetUsername, callerName, room, callType }` | Initiate direct call |
-| `call_response` | `{ callerId, response }` | Accept/decline call |
-| `call_cancel` | `{ targetUsername }` | Cancel outgoing call |
-| `control_revoke` | — | Emergency kill (from desktop agent) |
-| `room_typing` | `{ roomName, username, isTyping }` | Broadcast room typing status |
-| `direct_message_typing` | `{ targetUsername, senderUsername, isTyping }` | Send DM typing status to target user |
-
+| `text_event` | `{ roomName, textData }` | Whiteb| `workspace_change` | `{ roomName, text, selectionStart, selectionEnd, sender }` | Broadcast workspace text updates collaboratively |
+| `workspace_sync_request` | `{ roomName, requesterId }` | Request initial workspace state from peers upon late joining |
+| `workspace_sync_response` | `{ targetId, text, versions, locked, lockedBy }` | Send current workspace state, versions, and lock status to late-joining requester |
+| `workspace_version_saved` | `{ roomName, version }` | Broadcast collaborative saved workspace snapshot/version to peers |
+| `workspace_version_deleted` | `{ roomName, versionId }` | Broadcast deletion of a collaborative workspace version to peers |
+| `workspace_lock_changed` | `{ roomName, locked, lockedBy }` | Broadcast toggle of collaborative edit lock state to peers |
+ 
 ### Socket.IO Events (Server → Client)
-
+ 
 | Event | Payload | Purpose |
 |---|---|---|
 | `joined` | `{ participants }` | Confirmed room join + roster |
@@ -261,6 +250,7 @@ pushSubscriptions // { [username]: PushSubscription } — Web Push subs
 | `remote_shape` | `ShapeData` | Peer drew a shape on whiteboard |
 | `remote_text` | `TextData` | Peer added text to whiteboard |
 | `remote_image` | `ImageData` | Peer added image to whiteboard |
+| `remote_cursor` | `{ socketId, cursorData }` | Relays a peer's collaborative cursor coordinates, pointer details, and active laser pointer trails |
 | `remote_clear` | — | Peer cleared whiteboard |
 | `remote_load` | `{ url }` | Peer loaded whiteboard snapshot |
 | `screen_share_started` | `{ participantId }` | Someone started sharing |
@@ -275,6 +265,29 @@ pushSubscriptions // { [username]: PushSubscription } — Web Push subs
 | `call_cancelled` | — | Caller cancelled call |
 | `room_typing` | `{ username, isTyping }` | Incoming room typing indicator status |
 | `direct_message_typing` | `{ senderUsername, isTyping }` | Incoming DM typing indicator status |
+| `remote_workspace_update` | `{ text, versions, locked, lockedBy }` | Collaborative workspace updates from a peer (includes text, snapshots registry, and lock state) |
+| `remote_workspace_sync_requested` | `{ requesterId }` | Requests from peers to sync state to late-joiner |
+| `remote_workspace_sync_delivered` | `{ text }` | Delivers the current synced workspace text to newcomer |
+| `remote_workspace_version_saved` | `SavedVersion` | Delivers saved workspace snapshot from a peer to local registry |
+| `remote_workspace_version_deleted` | `{ versionId }` | Delivers deleted workspace version ID to remove from local registry |
+| `remote_workspace_lock_changed` | `{ locked, lockedBy }` | Delivers real-time toggle of collaborative workspace edit lock |ter details, and active laser pointer trails |
+| `remote_clear` | — | Peer cleared whiteboard |
+| `remote_load` | `{ url }` | Peer loaded whiteboard snapshot |
+| `screen_share_started` | `{ participantId }` | Someone started sharing |
+| `screen_share_stopped` | `{ participantId }` | Someone stopped sharing |
+| `remote_control_requested` | `{ requesterName, requesterSocketId, accessType }` | Someone wants control |
+| `remote_control_granted` | `{ grantedBy, accessType, hostSocketId }` | Control was granted |
+| `remote_control_revoked` | — | Control was revoked |
+| `remote_input` | `{ inputType, data }` | Incoming mouse/keyboard event |
+| `incoming_call` | `{ callerName, callerId, room, callType }` | Someone is calling you |
+| `call_response` | `{ response }` | Other party's call response |
+| `call_invite_failed` | `{ reason, targetUsername }` | Call failed (offline) |
+| `call_cancelled` | — | Caller cancelled call |
+| `room_typing` | `{ username, isTyping }` | Incoming room typing indicator status |
+| `direct_message_typing` | `{ senderUsername, isTyping }` | Incoming DM typing indicator status |
+| `remote_workspace_update` | `{ text, selectionStart, selectionEnd, sender }` | Collaborative workspace updates from a peer |
+| `remote_workspace_sync_requested` | `{ requesterId }` | Requests from peers to sync state to late-joiner |
+| `remote_workspace_sync_delivered` | `{ text }` | Delivers the current synced workspace text to newcomer |
 
 ### HTTP Endpoints (Signalling Server)
 
@@ -352,9 +365,9 @@ Runs on port 8002. Three endpoints:
 | `GET` | `/api/ai/health` | Status check |
 | `POST` | `/api/ai/transcribe` | Transcribe audio file (Whisper / simulated) |
 | `POST` | `/api/ai/tts` | Generate speech from text (Coqui XTTS-v2 / simulated) |
-| `POST` | `/api/ai/actions` | Extract action items from transcript (regex NLP) |
+| `POST` | `/api/ai/actions` | Extract high-fidelity action items (priority, completed status), overall sentiment, and key topics from transcript (OpenAI LLM / Advanced Local Heuristic NLP engine) |
 
-**Current state:** Dynamically configured to use OpenAI Whisper and TTS APIs if `OPENAI_API_KEY` is present in the environment. If the key is missing, it safely falls back to local simulated responses.
+**Current state:** Dynamically configured to use OpenAI GPT, Whisper, and TTS APIs if `OPENAI_API_KEY` is present in the environment. If the key is missing, it safely falls back to local advanced simulated and heuristic NLP responses.
 
 ---
 
@@ -627,6 +640,7 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 | SEC-14 | Whiteboard stroke and shape data validated and sanitised |
 | SEC-21 | Audio upload: MIME type + file size validated before processing |
 | SEC-22 | P2P File Transfers chunk-by-chunk E2EE (AES-GCM-256 + 12-byte prepended IV) |
+| SEC-23 | Real-time collaborative cursor coordinates, pointer details, and dynamic laser trail vectors validated and sanitized on both client and server |
 
 ---
 
@@ -674,6 +688,6 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 
 ---
 
-*Last updated: 2026-05-30 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented high-fidelity real-time AI captioning, translation, and meeting intelligence panel. Developed Web Speech API integration with intelligent fallback to a robust offline Speech Simulator; added translation pipelines mapping spoken dialogue to multiple target languages (ES, FR, DE, JA); built premium active-caption overlay badges directly on local and remote video tiles featuring subtle micro-animations and adaptive positioning; designed a dedicated sidebar tab for the 'AI Assistant' (`AiAssistantPanel.tsx`) displaying live, scrollable meeting transcripts, translation selectors, real-time AI summary extraction, offline regex-based action-item parsing, and a one-click Markdown dialogue log export system).*
+*Last updated: 2026-05-30 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented the E2EE Secure File Vault. Built a persistent backend history layer utilizing `get_file_transfer_history_db` under `server/db/supabase_api.py` and a FastAPI history REST endpoint under `server/main.py`; integrated real-time state synchronization via client-side WebRTC lifecycle hooks in `client/src/App.tsx` that automatically sync P2P status updates to the database; designed a highly responsive sliding drawer panel for the vault featuring a glassmorphic look, type-ahead file filtering, and real-time status badges (pending, completed, accepted, declined, failed) with in-vault action hooks for pending transfers; and introduced a dedicated `FolderLock` header toggle button in the chat control panel. Upgraded NexaWorkspace collaborative sandbox by synchronizing the Document Snapshot Version Registry across all active room peers; integrated a presence-aware cooperative edit lock system restricting editing access to specific peers with interactive header indicators, a lock/unlock button, and a glowing read-only warning banner; and optimized front-end production bundle load times by implementing Rollup manual code-splitting for vendor packages, resolving build chunk size warnings. Upgraded the AI Meeting Intelligence Suite by implementing a hybrid AI/NLP meeting action extraction engine in `ai-sidecar/main.py` that utilizes OpenAI GPT-4o-mini/GPT-3.5-turbo with structured JSON outputs if an OpenAI key is present, and falls back to a high-fidelity offline rule-based heuristic parsing engine; extended the Pydantic/TypeScript schemas to support multi-attribute tracking fields including task `id`, `priority` (high, medium, low), `completed` status, overall call `sentiment` analysis, and a tag-cloud of key technical `topics`; designed a stunning, premium interactive UI in `client/src/components/AiAssistantPanel.tsx` with dynamic task checklist checkboxes, a progress indicator bar, inline editing of task texts, due dates, assignees, and priorities, as well as an inline drawer for creating custom deliverables; and introduced a custom event-driven collaborative integration in `client/src/components/WorkspacePanel.tsx` that synchronizes interactive call action lists directly into the shared document editor in real-time).*
 
 

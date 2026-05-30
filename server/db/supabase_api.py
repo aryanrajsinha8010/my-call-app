@@ -5,8 +5,10 @@ import urllib.parse
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Load environment variables from .env
-load_dotenv(override=True)
+# Load environment variables from .env using an absolute path relative to this file
+base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+env_path = os.path.join(base_dir, '.env')
+load_dotenv(env_path, override=True)
 
 # SEC-02 FIX: Load Supabase credentials from environment variables.
 # Never hardcode API keys or project URLs in source code.
@@ -29,6 +31,7 @@ def _headers(use_bearer=True):
     jwt_secret = os.getenv("JWT_SECRET_KEY", "").strip().strip("'\"")
     if jwt_secret:
         h["X-Signalling-Secret"] = jwt_secret
+        h["x-signalling-secret"] = jwt_secret
     if use_bearer:
         h["Authorization"] = f"Bearer {SUPABASE_ANON_KEY}"
         h["Prefer"] = "return=representation"
@@ -478,6 +481,18 @@ def update_file_transfer_status_db(transfer_id: int, status: str):
     }
     url = f"{SUPABASE_URL}/rest/v1/file_transfers?id=eq.{int(transfer_id)}"
     return _http_request(url, "PATCH", payload)
+
+
+# 25b. Get all file transfer history between two users
+def get_file_transfer_history_db(user_a: str, user_b: str, limit: int = 50):
+    safe_key = urllib.parse.quote(_convo_key(user_a, user_b), safe='')
+    url = (
+        f"{SUPABASE_URL}/rest/v1/file_transfers"
+        f"?conversation_key=eq.{safe_key}"
+        f"&order=created_at.desc"
+        f"&limit={int(limit)}"
+    )
+    return _http_request(url, "GET")
 
 
 # 26. Edit a direct message (only if sender matches)

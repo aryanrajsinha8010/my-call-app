@@ -95,6 +95,11 @@ if not exist "%ROOT%\server\venv" (
     call deactivate
 )
 
+echo   [Setup] Synchronizing database schema and security policies...
+call "%ROOT%\server\venv\Scripts\activate.bat"
+python "%ROOT%\server\db_optimize.py"
+call deactivate
+
 :: 3. AI Sidecar Python venv
 if not exist "%ROOT%\ai-sidecar\venv" (
     echo   [Setup] Creating Python venv for ai-sidecar...

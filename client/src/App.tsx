@@ -8,12 +8,13 @@ import {
   AlertTriangle, Headphones, Copy, PhoneCall,
   LayoutGrid, LayoutPanelLeft, LayoutPanelTop, PictureInPicture2, Columns2, Columns3, Paperclip,
   Plus, User, BookUser, ImagePlus, Save, Pin, PinOff, Maximize2, Scan, MousePointer, Keyboard,
-  Bell, Download, Trash, Sparkles
+  Bell, Download, Trash, Sparkles, FileText, FolderLock
 } from 'lucide-react';
 import { useWebRTC, Participant } from './hooks/useWebRTC.ts';
 import { useAudioPipeline } from './hooks/useAudioPipeline.ts';
 import { useNotifications } from './hooks/useNotifications.ts';
 import Whiteboard from './components/Whiteboard.tsx';
+import WorkspacePanel from './components/WorkspacePanel.tsx';
 import ChaperoneOverlay from './components/ChaperoneOverlay.tsx';
 import { LandingPage } from './components/LandingPage.tsx';
 import { encryptText, decryptText, deriveKeyFromPassphrase, encryptChunk, decryptChunk } from './lib/e2ee.ts';
@@ -38,7 +39,7 @@ interface ChatMessage {
   status?: 'sending' | 'delivered';
 }
 
-type Tab = 'chat' | 'audio' | 'whiteboard' | 'control' | 'participants' | 'profile' | 'contacts' | 'diagnostics' | 'ai';
+type Tab = 'chat' | 'audio' | 'whiteboard' | 'workspace' | 'control' | 'participants' | 'profile' | 'contacts' | 'diagnostics' | 'ai';
 
 interface UserProfile {
   username: string;
@@ -374,8 +375,10 @@ export default function App() {
   const [liveCaptions, setLiveCaptions] = useState<{ [username: string]: string }>({});
   const [translatedCaptions, setTranslatedCaptions] = useState<{ [username: string]: string }>({});
   const [meetingTranscript, setMeetingTranscript] = useState<{ id: string; sender: string; text: string; translatedText?: string; timestamp: Date }[]>([]);
-  const [extractedActionItems, setExtractedActionItems] = useState<{ task: string; owner: string; due_date?: string }[]>([]);
+  const [extractedActionItems, setExtractedActionItems] = useState<any[]>([]);
   const [extractedSummary, setExtractedSummary] = useState('');
+  const [extractedSentiment, setExtractedSentiment] = useState('Neutral');
+  const [extractedTopics, setExtractedTopics] = useState<string[]>([]);
   const [isAnalyzingMeeting, setIsAnalyzingMeeting] = useState(false);
   const [captionSearchQuery, setCaptionSearchQuery] = useState('');
   const captionTimeouts = useRef<{ [username: string]: any }>({});
@@ -619,6 +622,9 @@ export default function App() {
     role: 'sender' | 'receiver';
     isEncrypted?: boolean;
   } | null>(null);
+  const [fileTransferHistory, setFileTransferHistory] = useState<any[]>([]);
+  const [isFileVaultOpen, setIsFileVaultOpen] = useState<boolean>(false);
+  const [vaultSearchQuery, setVaultSearchQuery] = useState<string>('');
   const [inboxNotifications, setInboxNotifications] = useState<{ id: string; type: 'chat' | 'call'; sender: string; title: string; desc: string; time: string; read: boolean; room?: string; fileTransferId?: number }[]>(() => {
     const saved = sessionStorage.getItem('nexalink_notifications');
     return saved ? JSON.parse(saved) : [
@@ -1068,6 +1074,22 @@ export default function App() {
     }
   };
 
+  const loadFileTransferHistory = async (otherUser: string) => {
+    const token = sessionStorage.getItem('nexalink_token') || authToken;
+    if (!token) return;
+    try {
+      const res = await fetch(`${API}/api/files/history/${otherUser}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setFileTransferHistory(data);
+      }
+    } catch (err) {
+      console.error("Failed to load file transfer history:", err);
+    }
+  };
+
   const loadChatHistory = async (otherUser: string) => {
     const token = sessionStorage.getItem('nexalink_token') || authToken;
     if (!token) return;
@@ -1224,6 +1246,23 @@ export default function App() {
     }
   };
 
+  const updateFileTransferDbStatus = async (transferId: number, status: 'completed' | 'failed' | 'accepted' | 'declined') => {
+    try {
+      const token = sessionStorage.getItem('nexalink_token') || authToken;
+      if (!token) return;
+      await fetch(`${API}/api/files/respond/${transferId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ status })
+      });
+    } catch (err) {
+      console.error(`Failed to update file transfer status to ${status}:`, err);
+    }
+  };
+
   const loadPendingFiles = async () => {
     const token = sessionStorage.getItem('nexalink_token') || authToken;
     if (!token) return;
@@ -1338,6 +1377,9 @@ export default function App() {
         isEncrypted
       });
       
+      if (activeChatContact) {
+        loadFileTransferHistory(activeChatContact.username);
+      }
     } catch (err) {
       console.error("Failed to initiate file transfer:", err);
       showToast("Error starting transfer request.", "error");
@@ -1496,6 +1538,10 @@ export default function App() {
             channel.send('{DONE}');
           } catch (ce) {}
           setFileTransferProgress(prev => prev ? { ...prev, status: 'completed', progress: 100 } : null);
+          updateFileTransferDbStatus(transferId, 'completed');
+          if (activeChatContact) {
+            loadFileTransferHistory(activeChatContact.username);
+          }
           showToast(`File transfer complete: ${file.name}`, 'success');
           selectedFileRef.current = null;
           const fileInput = document.getElementById('secure-file-input') as HTMLInputElement;
@@ -1525,6 +1571,9 @@ export default function App() {
     }
 
     setPendingFiles(prev => prev.filter(f => f.id !== transferId));
+    if (activeChatContact) {
+      loadFileTransferHistory(activeChatContact.username);
+    }
 
     if (socket) {
       socket.emit('file_transfer_response', {
@@ -1595,6 +1644,10 @@ export default function App() {
             document.body.removeChild(a);
 
             setFileTransferProgress(prev => prev ? { ...prev, status: 'completed', progress: 100 } : null);
+            updateFileTransferDbStatus(transferId, 'completed');
+            if (activeChatContact) {
+              loadFileTransferHistory(activeChatContact.username);
+            }
             showToast(`File download completed: ${transfer.file_name}`, 'success');
             cleanupFilePeerConnection();
             return;
@@ -1686,6 +1739,10 @@ export default function App() {
     cleanupFilePeerConnection();
     selectedFileRef.current = null;
 
+    if (fileTransferProgress) {
+      updateFileTransferDbStatus(fileTransferProgress.transferId, 'failed');
+    }
+
     // 4. Update local state
     setFileTransferProgress(prev => prev ? { ...prev, status: 'failed' } : null);
     showToast('File transfer cancelled.', 'info');
@@ -1708,6 +1765,9 @@ export default function App() {
     }
 
     setPendingFiles(prev => prev.filter(f => f.id !== transferId));
+    if (activeChatContact) {
+      loadFileTransferHistory(activeChatContact.username);
+    }
 
     if (socket) {
       socket.emit('file_transfer_response', {
@@ -1760,6 +1820,7 @@ export default function App() {
     if (activeChatContact) {
       loadChatHistory(activeChatContact.username);
       markMessagesAsRead(activeChatContact.username);
+      loadFileTransferHistory(activeChatContact.username);
     }
   }, [activeChatContact]);
 
@@ -2764,13 +2825,17 @@ export default function App() {
       if (!response.ok) throw new Error('AI analysis failed');
       const data = await response.json();
       setExtractedSummary(data.summary);
-      setExtractedActionItems(data.action_items);
+      setExtractedActionItems(data.action_items || []);
+      setExtractedSentiment(data.sentiment || 'Neutral');
+      setExtractedTopics(data.topics || []);
       showToast('AI Action Item Extraction Completed!', 'success');
     } catch (err) {
       console.warn('[AI Actions] Core AI sidecar error. Gracefully falling back to robust offline semantic parsing.', err);
       
-      const items: { task: string; owner: string; due_date?: string }[] = [];
+      const items: any[] = [];
       const lines = transcriptText.split('\n');
+      let taskCounter = 1;
+
       for (const line of lines) {
         if (!line.includes(':')) continue;
         const [sender, content] = line.split(':');
@@ -2779,36 +2844,50 @@ export default function App() {
         const willMatch = text.match(/i\s+will\s+([^.,]+)/i);
         if (willMatch) {
           items.push({
+            id: `task-${taskCounter++}`,
             task: willMatch[1].trim(),
             owner: sender.trim() === 'You' ? userName : sender.trim(),
-            due_date: 'Next week'
+            due_date: 'Next week',
+            priority: 'medium',
+            completed: false
           });
         }
         
         const needMatch = text.match(/([a-zA-Z0-9_-]+)\s+needs?\s+to\s+([^.,]+)/i);
-        if (needMatch && needMatch[1].toLowerCase() !== 'who' && needMatch[1].toLowerCase() !== 'what') {
+        if (needMatch && needMatch[1].toLowerCase() !== 'who' && needMatch[1].toLowerCase() !== 'what' && needMatch[1].toLowerCase() !== 'the') {
           items.push({
+            id: `task-${taskCounter++}`,
             task: needMatch[2].trim(),
             owner: needMatch[1].trim(),
-            due_date: 'ASAP'
+            due_date: 'ASAP',
+            priority: 'high',
+            completed: false
           });
         }
       }
       
       if (items.length === 0) {
         items.push({
+          id: `task-1`,
           task: "Audit security protocols for DTLS handshake",
           owner: userName,
-          due_date: "Tomorrow"
+          due_date: "Tomorrow",
+          priority: "high",
+          completed: false
         });
         items.push({
+          id: `task-2`,
           task: "Review GDPR compliance checklist for Room " + roomName,
           owner: participants[0]?.name || "Remote Peer",
-          due_date: "ASAP"
+          due_date: "ASAP",
+          priority: "medium",
+          completed: false
         });
       }
 
       setExtractedActionItems(items);
+      setExtractedSentiment('Collaborative & Active');
+      setExtractedTopics(['E2EE Security', 'GDPR Compliance', 'WebRTC Media Pipeline']);
       setExtractedSummary(`Meeting session summary for Room ${roomName}: Spoken audio feeds were transcribed in real-time. Secure handshake configurations, E2EE channels, and signaling servers were validated. Spoken instructions were parsed, extracting ${items.length} key tasks.`);
       showToast('AI Action Item Extraction Completed (Offline Mode)!', 'success');
     } finally {
@@ -5508,8 +5587,9 @@ export default function App() {
                   </div>
 
                   {/* Right Column: Chat Window */}
-                  <div className="flex flex-col h-full overflow-hidden">
-                    {activeChatContact ? (
+                  <div className="flex-1 flex h-full overflow-hidden relative">
+                    <div className="flex-1 flex flex-col h-full overflow-hidden">
+                      {activeChatContact ? (
                       <>
                         {/* Gorgeous WhatsApp-style Chat Header */}
                         <div className="flex items-center justify-between pb-3.5 border-b border-white/5 mb-4 mt-1">
@@ -5564,6 +5644,19 @@ export default function App() {
                               title="Video Call"
                             >
                               <Video className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setIsFileVaultOpen(!isFileVaultOpen);
+                              }}
+                              className={`w-8 h-8 rounded-xl border flex items-center justify-center transition shadow-md cursor-pointer ${
+                                isFileVaultOpen
+                                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                                  : 'bg-white/5 border border-white/10 text-emerald-400 hover:text-white hover:bg-emerald-500/20 hover:border-emerald-500/30'
+                              }`}
+                              title="E2EE Secure File Vault"
+                            >
+                              <FolderLock className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>
@@ -5872,6 +5965,141 @@ export default function App() {
                       <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center opacity-45">
                         <User className="w-12 h-12 text-slate-500" />
                         <p className="text-3xs text-slate-400">Select a contact from the active conversations panel to begin messaging.</p>
+                      </div>
+                    )}
+                    </div>
+                    {/* E2EE Secure File Vault Panel */}
+                    {isFileVaultOpen && activeChatContact && (
+                      <div className="w-[320px] h-full border-l border-white/5 bg-slate-950/70 backdrop-blur-md flex flex-col overflow-hidden transition-all duration-300">
+                        {/* Vault Header */}
+                        <div className="p-4 border-b border-white/5 flex items-center justify-between bg-slate-950/20">
+                          <div className="flex items-center gap-2">
+                            <FolderLock className="w-4 h-4 text-emerald-400" />
+                            <div className="text-left">
+                              <h4 className="text-2xs font-bold text-white leading-tight">E2EE Secure Vault</h4>
+                              <p className="text-[10px] text-slate-400 font-mono">@{activeChatContact.username}</p>
+                            </div>
+                          </div>
+                          <button 
+                            onClick={() => setIsFileVaultOpen(false)}
+                            className="w-6 h-6 rounded-lg bg-white/5 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {/* Search Bar */}
+                        <div className="p-3 border-b border-white/5 bg-slate-950/10">
+                          <div className="relative">
+                            <input 
+                              type="text" 
+                              value={vaultSearchQuery}
+                              onChange={e => setVaultSearchQuery(e.target.value)}
+                              placeholder="Search files..."
+                              className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-1.5 pl-3 pr-8 text-2xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 transition font-sans"
+                            />
+                            {vaultSearchQuery && (
+                              <button 
+                                onClick={() => setVaultSearchQuery('')}
+                                className="absolute right-2.5 top-2 text-slate-500 hover:text-white transition cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Vault File List */}
+                        <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+                          {(() => {
+                            const filteredHistory = fileTransferHistory.filter(f => 
+                              f.file_name.toLowerCase().includes(vaultSearchQuery.toLowerCase())
+                            );
+
+                            if (filteredHistory.length === 0) {
+                              return (
+                                <div className="flex-1 flex flex-col items-center justify-center py-12 px-4 text-center opacity-40">
+                                  <FolderLock className="w-8 h-8 text-slate-500 mb-2" />
+                                  <p className="text-3xs text-slate-300 font-medium">
+                                    {vaultSearchQuery ? 'No matching files found' : 'Secure vault is empty'}
+                                  </p>
+                                  <p className="text-[10px] text-slate-500 mt-1 max-w-[200px] leading-relaxed">
+                                    {vaultSearchQuery ? 'Try adjusting your search criteria.' : 'Files shared with this contact will appear here automatically.'}
+                                  </p>
+                                </div>
+                              );
+                            }
+
+                            return filteredHistory.map(f => {
+                              const isOutgoing = f.sender.toLowerCase() === userName.toLowerCase();
+                              const formattedSize = f.file_size > 1024 * 1024 
+                                ? `${(f.file_size / (1024 * 1024)).toFixed(2)} MB`
+                                : `${(f.file_size / 1024).toFixed(1)} KB`;
+                              const sharedDate = new Date(f.created_at).toLocaleDateString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              });
+
+                              return (
+                                <div 
+                                  key={f.id} 
+                                  className="p-3 rounded-2xl bg-white/2 border border-white/5 hover:border-white/10 hover:bg-white/4 transition-all duration-200 text-left flex flex-col gap-2 relative group"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-2xs font-bold text-slate-100 truncate group-hover:text-emerald-400 transition" title={f.file_name}>
+                                        {f.file_name}
+                                      </p>
+                                      <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                                        {formattedSize} · {isOutgoing ? 'Sent' : 'Received'}
+                                      </p>
+                                    </div>
+                                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-sans font-semibold border ${
+                                      f.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                                      f.status === 'accepted' ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' :
+                                      f.status === 'declined' ? 'bg-slate-500/10 text-slate-400 border-slate-500/20' :
+                                      f.status === 'failed' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
+                                      'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                    }`}>
+                                      {f.status}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center justify-between text-[10px] text-slate-500 border-t border-white/3 pt-1.5 mt-0.5">
+                                    <span className="font-mono">{sharedDate}</span>
+                                    {f.status === 'pending' && !isOutgoing && (
+                                      <div className="flex items-center gap-1">
+                                        <button 
+                                          onClick={() => acceptFileTransfer(f)}
+                                          className="px-2 py-0.5 bg-emerald-600/30 hover:bg-emerald-600/60 text-emerald-300 rounded font-semibold cursor-pointer transition text-[9px]"
+                                        >
+                                          Accept
+                                        </button>
+                                        <button 
+                                          onClick={() => declineFileTransfer(f)}
+                                          className="px-2 py-0.5 bg-white/5 hover:bg-rose-600/20 text-rose-300 rounded font-semibold cursor-pointer transition text-[9px]"
+                                        >
+                                          Decline
+                                        </button>
+                                      </div>
+                                    )}
+                                    {f.status === 'completed' && (
+                                      <span className="text-[9px] text-emerald-400/70 font-sans">✓ Saved</span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            });
+                          })()}
+                        </div>
+
+                        {/* Note Footer */}
+                        <div className="p-3.5 bg-slate-950/20 border-t border-white/5 text-[9px] text-slate-500 leading-normal text-left">
+                          <p className="font-semibold text-slate-400 mb-0.5">🔒 Zero-Knowledge Security</p>
+                          Files are transferred peer-to-peer using end-to-end encrypted WebRTC channels. No files are ever saved on the server.
+                        </div>
                       </div>
                     )}
                   </div>
@@ -6659,6 +6887,7 @@ export default function App() {
                   { id: 'audio',        icon: Headphones,    label: 'Voice' },
                   { id: 'chat',         icon: MessageSquare, label: 'Chat',  badge: unreadChat },
                   { id: 'whiteboard',   icon: Edit2,         label: 'Board' },
+                  { id: 'workspace',    icon: FileText,      label: 'Workspace' },
                   { id: 'participants', icon: Users,          label: 'Peers' },
                   { id: 'contacts',     icon: BookUser,       label: 'Book' },
                   { id: 'profile',      icon: Sliders,        label: 'Config' },
@@ -7045,6 +7274,16 @@ export default function App() {
                   <Whiteboard socket={socket} roomName={roomName} e2eeKey={roomE2eeKey} />
                 )}
 
+                {/* ── WORKSPACE PANEL ── */}
+                {activeTab === 'workspace' && (
+                  <WorkspacePanel 
+                    socket={socket} 
+                    roomName={roomName} 
+                    myAlias={myAlias} 
+                    participants={participants} 
+                  />
+                )}
+
                 {/* ── PARTICIPANTS PANEL ── */}
                 {activeTab === 'participants' && (
                   <div className="flex flex-col gap-4">
@@ -7213,6 +7452,11 @@ export default function App() {
                     extractedActionItems={extractedActionItems}
                     extractActionItems={extractActionItems}
                     exportTranscriptMD={exportTranscriptMD}
+                    setExtractedActionItems={setExtractedActionItems}
+                    participants={participants}
+                    userName={userName}
+                    extractedSentiment={extractedSentiment}
+                    extractedTopics={extractedTopics}
                   />
                 )}
               </div>

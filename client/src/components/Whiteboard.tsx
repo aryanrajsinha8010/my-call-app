@@ -3,7 +3,7 @@ import {
   Trash2, RotateCcw, RotateCw, Download, PenTool, Eraser, 
   FolderOpen, UploadCloud, Palette, Sliders, CloudLightning,
   Sparkles, Check, AlertCircle, RefreshCw, Type, Image,
-  Square, Circle, Minus, ArrowRight, Lock
+  Square, Circle, Minus, ArrowRight, Lock, MousePointer
 } from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import { encryptText, decryptText } from '../lib/e2ee.ts';
@@ -35,13 +35,26 @@ interface Stroke {
   isEraser: boolean;
 }
 
+interface RemoteCursor {
+  socketId: string;
+  username: string;
+  x: number;
+  y: number;
+  isLaser: boolean;
+  color: string;
+  active: boolean;
+  isDrawing: boolean;
+  lastSeen: number;
+}
+
 export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState('#dcb16b'); // Start with the premium golden color
   const [brushSize, setBrushSize] = useState(4);
-  const [tool, setTool] = useState<'pen' | 'eraser' | 'text' | 'image' | 'rectangle' | 'circle' | 'line' | 'arrow'>('pen');
+  const [tool, setTool] = useState<'pen' | 'eraser' | 'text' | 'image' | 'rectangle' | 'circle' | 'line' | 'arrow' | 'laser'>('pen');
   const [fillShapes, setFillShapes] = useState(false);
   const [annotationText, setAnnotationText] = useState('Annotation');
   const [fontSize, setFontSize] = useState(16);
@@ -51,6 +64,17 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
   const [isImageValid, setIsImageValid] = useState<boolean | null>(null);
   const [isImageLoading, setIsImageLoading] = useState(false);
   
+  // Real-time Collaborative Presentation, Cursors and Laser Pointer Refs & States
+  const [remoteCursors, setRemoteCursors] = useState<Record<string, RemoteCursor>>({});
+  const localMouseCoords = useRef<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false });
+  const localLaserPath = useRef<{ x: number; y: number; timestamp: number }[]>([]);
+  const remoteLaserPaths = useRef<Record<string, { x: number; y: number; timestamp: number }[]>>({});
+  const lastEmitTime = useRef<number>(0);
+  const animationFrameId = useRef<number | null>(null);
+
+  // Resolve current username safely with robust fallbacks
+  const userName = (typeof window !== 'undefined' ? sessionStorage.getItem('nexalink_username') : null) || 'Anonymous';
+
   // History Stacks for Local Undo/Redo
   const [history, setHistory] = useState<string[]>([]);
   const [redoStack, setRedoStack] = useState<string[]>([]);
@@ -382,15 +406,25 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
   };
 
   const handleStartDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    saveState();
     const canvas = canvasRef.current;
     if (!canvas) return;
+    
+    if (tool !== 'laser') {
+      saveState();
+    }
     
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
+    
+    if (tool === 'laser') {
+      localLaserPath.current = [{ x, y, timestamp: Date.now() }];
+      setIsDrawing(true);
+      emitCursor({ x, y, active: true, isDrawing: true });
+      return;
+    }
     
     if (tool === 'text') {
       const textToDraw = annotationText.trim();
@@ -498,7 +532,6 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
   };
 
   const handleDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || tool === 'text') return;
     const canvas = canvasRef.current;
     const ctx = getCanvasContext();
     if (!canvas || !ctx) return;
@@ -509,7 +542,22 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
 
+    // Track local coordinates for cursor badge and presentation layer
+    localMouseCoords.current = { x, y, visible: true };
+
+    // Emit live cursor coordinate throttled
+    emitCursor({ x, y, active: true, isDrawing });
+
     currentPos.current = { x, y };
+
+    if (tool === 'laser') {
+      if (isDrawing) {
+        localLaserPath.current.push({ x, y, timestamp: Date.now() });
+      }
+      return;
+    }
+
+    if (!isDrawing || tool === 'text') return;
 
     if (['rectangle', 'circle', 'line', 'arrow'].includes(tool)) {
       if (startImageDataRef.current) {
@@ -575,8 +623,16 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
   };
 
   const handleStopDraw = (e?: React.MouseEvent<HTMLCanvasElement>) => {
+    // Hide our local cursor and broadcast deactivation to room peers
+    localMouseCoords.current.visible = false;
+    emitCursor({ x: 0, y: 0, active: false, isDrawing: false });
+
     if (!isDrawing) return;
     setIsDrawing(false);
+
+    if (tool === 'laser') {
+      return; // Laser trails are temporary and do not record shapes
+    }
 
     if (['rectangle', 'circle', 'line', 'arrow'].includes(tool)) {
       const canvas = canvasRef.current;
@@ -682,6 +738,170 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
     link.click();
     showToast("Whiteboard exported as PNG", "success");
   };
+
+  // ── REAL-TIME PRESENTATION MODE & DYNAMIC COLLABORATIVE CURSORS ──
+
+  // Emit dynamic real-time collaborative cursor/laser events (E2EE support)
+  const emitCursor = (data: { x: number; y: number; active: boolean; isDrawing: boolean }) => {
+    if (!socket) return;
+    
+    const now = Date.now();
+    // Throttling: emit at most every 40ms (~25 fps) to save network but keep updates smooth
+    if (!data.active || now - lastEmitTime.current > 40) {
+      const cursorPayload = {
+        x: Math.round(data.x),
+        y: Math.round(data.y),
+        username: userName,
+        isLaser: tool === 'laser',
+        color,
+        active: data.active,
+        isDrawing: data.isDrawing
+      };
+      
+      (async () => {
+        let finalPayload: any = cursorPayload;
+        if (e2eeKey) {
+          try {
+            finalPayload = await encryptText(JSON.stringify(cursorPayload), e2eeKey);
+          } catch (err) {
+            console.error("Cursor coordinate encryption failed:", err);
+          }
+        }
+        socket.emit('cursor_event', { roomName, cursorData: finalPayload });
+      })();
+      
+      if (data.active) {
+        lastEmitTime.current = now;
+      }
+    }
+  };
+
+  // Draw high-fidelity lightsaber style laser dot with dynamic outer/inner glow rings
+  const drawLaserDot = (ctx: CanvasRenderingContext2D, x: number, y: number, dotColor: string) => {
+    ctx.save();
+    
+    // Outer glow ring
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, 2 * Math.PI);
+    ctx.fillStyle = `${dotColor}22`; // highly transparent outer glow
+    ctx.fill();
+
+    // Inner glow dot
+    ctx.beginPath();
+    ctx.arc(x, y, 6.5, 0, 2 * Math.PI);
+    ctx.fillStyle = `${dotColor}66`; // medium transparency inner glow
+    ctx.fill();
+
+    // Center bright hot core dot
+    ctx.beginPath();
+    ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    ctx.restore();
+  };
+
+  // Draw multi-layered glowing laser trails that fade smoothly
+  const drawLaserTrail = (ctx: CanvasRenderingContext2D, points: { x: number; y: number; timestamp: number }[], trailColor: string) => {
+    if (points.length < 2) return;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    const now = Date.now();
+
+    for (let i = 1; i < points.length; i++) {
+      const p1 = points[i - 1];
+      const p2 = points[i];
+
+      const age = now - p2.timestamp;
+      const lifeRatio = Math.max(0, Math.min(1, 1 - age / 1200)); // 1.2s total lifespan
+      if (lifeRatio <= 0) continue;
+
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+
+      // Multi-pass lightsaber glow rendering
+      // Step 1: Thick neon outer glow
+      ctx.lineWidth = brushSize * 2.5 * lifeRatio;
+      ctx.strokeStyle = `${trailColor}22`;
+      ctx.stroke();
+
+      // Step 2: Medium glowing core
+      ctx.lineWidth = brushSize * 1.2 * lifeRatio;
+      ctx.strokeStyle = `${trailColor}88`;
+      ctx.stroke();
+
+      // Step 3: Hot white center core
+      ctx.lineWidth = Math.max(1, brushSize * 0.4 * lifeRatio);
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  };
+
+  // Start dynamic high-performance overlay rendering loop at 60fps (requestAnimationFrame)
+  useEffect(() => {
+    let active = true;
+
+    const renderOverlay = () => {
+      if (!active) return;
+
+      const overlayCanvas = overlayCanvasRef.current;
+      if (!overlayCanvas) {
+        animationFrameId.current = requestAnimationFrame(renderOverlay);
+        return;
+      }
+
+      const ctx = overlayCanvas.getContext('2d');
+      if (!ctx) {
+        animationFrameId.current = requestAnimationFrame(renderOverlay);
+        return;
+      }
+
+      // Clear overlay canvas
+      ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+      const now = Date.now();
+
+      // 1. Clean up and draw local/remote laser paths
+      localLaserPath.current = localLaserPath.current.filter(p => now - p.timestamp < 1200);
+      drawLaserTrail(ctx, localLaserPath.current, color);
+
+      for (const [socketId, path] of Object.entries(remoteLaserPaths.current)) {
+        remoteLaserPaths.current[socketId] = path.filter(p => now - p.timestamp < 1200);
+        const cursor = remoteCursors[socketId];
+        const trailColor = cursor ? cursor.color : '#ff3366';
+        drawLaserTrail(ctx, remoteLaserPaths.current[socketId], trailColor);
+      }
+
+      // 2. Draw local glowing laser dot if tool is active and visible
+      if (tool === 'laser' && localMouseCoords.current.visible) {
+        drawLaserDot(ctx, localMouseCoords.current.x, localMouseCoords.current.y, color);
+      }
+
+      // 3. Draw remote glowing laser dots
+      Object.values(remoteCursors).forEach(cur => {
+        if (cur.active && cur.isLaser) {
+          drawLaserDot(ctx, cur.x, cur.y, cur.color);
+        }
+      });
+
+      animationFrameId.current = requestAnimationFrame(renderOverlay);
+    };
+
+    renderOverlay();
+
+    return () => {
+      active = false;
+      if (animationFrameId.current) {
+        cancelAnimationFrame(animationFrameId.current);
+      }
+    };
+  }, [tool, color, remoteCursors]);
 
   // Setup Remote drawing listeners
   useEffect(() => {
@@ -847,6 +1067,60 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
       );
     });
 
+    socket.on('remote_cursor', async ({ socketId, cursorData }: { socketId: string; cursorData: any }) => {
+      let finalCursor: any = cursorData;
+      if (typeof cursorData === 'string') {
+        if (e2eeKey) {
+          try {
+            const decrypted = await decryptText(cursorData, e2eeKey);
+            finalCursor = JSON.parse(decrypted);
+          } catch (err) {
+            console.warn('[E2EE Whiteboard] Failed to decrypt remote cursor:', err);
+            return;
+          }
+        } else {
+          return;
+        }
+      }
+
+      if (!finalCursor.active) {
+        setRemoteCursors(prev => {
+          const next = { ...prev };
+          delete next[socketId];
+          return next;
+        });
+        delete remoteLaserPaths.current[socketId];
+        return;
+      }
+
+      setRemoteCursors(prev => ({
+        ...prev,
+        [socketId]: {
+          socketId,
+          username: finalCursor.username || 'Anonymous',
+          x: finalCursor.x,
+          y: finalCursor.y,
+          isLaser: finalCursor.isLaser === true,
+          color: finalCursor.color || '#ff3366',
+          active: true,
+          isDrawing: finalCursor.isDrawing === true,
+          lastSeen: Date.now()
+        }
+      }));
+
+      // Append point to remote laser paths ref if active laser drawing
+      if (finalCursor.isLaser && finalCursor.isDrawing) {
+        if (!remoteLaserPaths.current[socketId]) {
+          remoteLaserPaths.current[socketId] = [];
+        }
+        remoteLaserPaths.current[socketId].push({
+          x: finalCursor.x,
+          y: finalCursor.y,
+          timestamp: Date.now()
+        });
+      }
+    });
+
     return () => {
       socket.off('remote_draw');
       socket.off('remote_clear');
@@ -854,6 +1128,7 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
       socket.off('remote_text');
       socket.off('remote_image');
       socket.off('remote_shape');
+      socket.off('remote_cursor');
     };
   }, [socket, e2eeKey]);
 
@@ -986,6 +1261,19 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
               title="Image Annotation Tool"
             >
               <Image className="w-4 h-4" />
+            </button>
+
+            <button 
+              type="button"
+              onClick={() => setTool('laser')}
+              className={`p-2 rounded-lg transition-all duration-200 ${
+                tool === 'laser' 
+                  ? 'bg-gradient-to-tr from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/20' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              }`}
+              title="Real-Time Presentation Laser Pointer"
+            >
+              <MousePointer className="w-4 h-4 text-rose-400 hover:scale-110 transition-transform duration-200" />
             </button>
           </div>
 
@@ -1282,6 +1570,19 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
         </div>
       )}
 
+      {/* Laser Tool Settings/Info Drawer */}
+      {tool === 'laser' && (
+        <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-white/5 flex flex-wrap items-center gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
+          <span className="text-[10px] text-rose-400 font-bold uppercase tracking-wider flex items-center gap-1.5 animate-pulse">
+            <span className="w-2 h-2 rounded-full bg-rose-500 ring-4 ring-rose-500/30" />
+            Laser Pointer Mode:
+          </span>
+          <span className="text-2xs text-slate-400 font-mono">
+            Hover to present with a glowing cursor. Click and drag to create real-time neon fading trails.
+          </span>
+        </div>
+      )}
+
       {/* Main Drawing Canvas Board with Cyberpunk Shell Frame */}
       <div className="border border-white/5 rounded-3xl overflow-hidden bg-[#060a18] shadow-2xl relative group">
         
@@ -1301,8 +1602,72 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
           className="block w-full cursor-crosshair relative z-10"
         />
 
+        {/* Dynamic High-Performance Overlay Canvas for Laser Pointer Trails */}
+        <canvas 
+          ref={overlayCanvasRef}
+          width="500"
+          height="320"
+          className="absolute top-0 left-0 w-full h-full pointer-events-none z-20"
+        />
+
+        {/* Real-time Collaborative Cursors Layer */}
+        <div className="absolute inset-0 pointer-events-none z-30 overflow-hidden">
+          {Object.values(remoteCursors).map((cursor) => {
+            if (!cursor.active) return null;
+            
+            // Calculate absolute position based on parent bounds using coordinate percentages
+            const leftPercent = `${(cursor.x / 500) * 100}%`;
+            const topPercent = `${(cursor.y / 320) * 100}%`;
+
+            return (
+              <div
+                key={cursor.socketId}
+                className="absolute flex flex-col items-start transition-all duration-75 ease-out"
+                style={{
+                  left: leftPercent,
+                  top: topPercent,
+                  transform: 'translate(-2px, -2px)', // center alignment offset
+                }}
+              >
+                {/* Visual Cursor Arrow / Glow indicator */}
+                {cursor.isLaser ? (
+                  // Custom gorgeous neon laser pointer ring (since dot is drawn in overlay canvas)
+                  <div className="w-2.5 h-2.5 rounded-full bg-white ring-4 animate-ping" style={{ ringColor: cursor.color, '--tw-ring-color': cursor.color } as any} />
+                ) : (
+                  // Custom elegant cyberpunk mouse pointer SVG styled with the user's theme color
+                  <svg
+                    className="w-4 h-4 drop-shadow-[0_2px_5px_rgba(0,0,0,0.5)]"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M4.5 3V17.5L9.2 12.8L14.8 21L17.5 19.2L12 11.2L17.5 10.5L4.5 3Z"
+                      fill={cursor.color}
+                      stroke="white"
+                      strokeWidth="1.5"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+
+                {/* Elegant Glassmorphic Username Badge */}
+                <div 
+                  className="mt-1 px-2 py-0.5 rounded-md text-[8px] font-bold font-mono tracking-wide text-white border backdrop-blur-md shadow-md animate-in fade-in zoom-in-90 duration-200"
+                  style={{ 
+                    backgroundColor: `${cursor.color}25`, // transparent tint
+                    borderColor: `${cursor.color}40` // semi-transparent border
+                  }}
+                >
+                  {cursor.username}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
         {/* Subtle coordinate overlay indicator */}
-        <div className="absolute bottom-2 right-3 z-20 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300 text-[8px] font-mono text-slate-500 uppercase tracking-widest">
+        <div className="absolute bottom-2 right-3 z-40 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300 text-[8px] font-mono text-slate-500 uppercase tracking-widest">
           Active Room Plane • {roomName}
         </div>
       </div>

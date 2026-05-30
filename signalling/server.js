@@ -954,6 +954,112 @@ io.on('connection', (socket) => {
     socket.to(roomName).emit('remote_image', imageData);
   });
 
+  socket.on('cursor_event', ({ roomName, cursorData }) => {
+    // SEC-23 FIX: Validate and sanitize dynamic real-time collaborative cursor/laser events.
+    if (!roomName || !cursorData) return;
+    
+    let clean = null;
+    if (typeof cursorData === 'string' && cursorData.startsWith('[E2EE]:')) {
+      // E2EE payload is checked for valid structure and passed securely
+      const parts = cursorData.split(':');
+      if (parts.length === 3 && parts[1] && parts[2]) {
+        clean = cursorData;
+      }
+    } else if (typeof cursorData === 'object') {
+      clean = {
+        x: Math.max(-1000, Math.min(10000, Number(cursorData.x) || 0)),
+        y: Math.max(-1000, Math.min(10000, Number(cursorData.y) || 0)),
+        username: typeof cursorData.username === 'string' ? cursorData.username.slice(0, 50) : 'Anonymous',
+        isLaser: cursorData.isLaser === true,
+        color: typeof cursorData.color === 'string' && /^(#[0-9a-fA-F]{3,8}|rgba?\(\d{1,3},\s*\d{1,3},\s*\d{1,3}(,\s*[\d.]+)?\)|[a-zA-Z]{3,20})$/.test(cursorData.color.trim())
+          ? cursorData.color.trim()
+          : '#ff3366',
+        active: cursorData.active === true,
+        isDrawing: cursorData.isDrawing === true
+      };
+    }
+    
+    if (clean) {
+      socket.to(roomName).emit('remote_cursor', {
+        socketId: socket.id,
+        cursorData: clean
+      });
+    }
+  });
+
+  // ── LIVE COLLABORATIVE ENGINEERING WORKSPACE (NexaWorkspace) ──
+  socket.on('workspace_change', ({ roomName, text, selectionStart, selectionEnd, sender }) => {
+    if (!roomName) return;
+    const safeText = typeof text === 'string' ? text.slice(0, 50000) : '';
+    socket.to(roomName).emit('remote_workspace_update', {
+      text: safeText,
+      selectionStart,
+      selectionEnd,
+      sender: typeof sender === 'string' ? sender.slice(0, 80) : 'Peer'
+    });
+  });
+
+  socket.on('workspace_sync_request', ({ roomName, requesterId }) => {
+    if (!roomName) return;
+    socket.to(roomName).emit('remote_workspace_sync_requested', { requesterId });
+  });
+
+  socket.on('workspace_sync_response', ({ targetId, text, versions, locked, lockedBy }) => {
+    if (!targetId) return;
+    const safeText = typeof text === 'string' ? text.slice(0, 50000) : '';
+    
+    // SEC-23 FIX: Robust sanitization of workspace versions list
+    let cleanVersions = [];
+    if (Array.isArray(versions)) {
+      cleanVersions = versions.map(v => ({
+        id: typeof v.id === 'string' ? v.id.slice(0, 80) : '',
+        title: typeof v.title === 'string' ? v.title.slice(0, 100) : '',
+        savedBy: typeof v.savedBy === 'string' ? v.savedBy.slice(0, 80) : 'Peer',
+        savedAt: typeof v.savedAt === 'string' ? v.savedAt.slice(0, 40) : '',
+        text: typeof v.text === 'string' ? v.text.slice(0, 50000) : ''
+      })).filter(v => v.id && v.title);
+    }
+
+    io.to(targetId).emit('remote_workspace_update', {
+      text: safeText,
+      versions: cleanVersions,
+      locked: !!locked,
+      lockedBy: typeof lockedBy === 'string' ? lockedBy.slice(0, 80) : ''
+    });
+  });
+
+  socket.on('workspace_version_saved', ({ roomName, version }) => {
+    if (!roomName || !version) return;
+    
+    // SEC-23 FIX: Robust validation and sanitization of collaborative engineering workspace snapshots
+    const cleanVersion = {
+      id: typeof version.id === 'string' ? version.id.slice(0, 80) : '',
+      title: typeof version.title === 'string' ? version.title.slice(0, 100) : '',
+      savedBy: typeof version.savedBy === 'string' ? version.savedBy.slice(0, 80) : 'Peer',
+      savedAt: typeof version.savedAt === 'string' ? version.savedAt.slice(0, 40) : '',
+      text: typeof version.text === 'string' ? version.text.slice(0, 50000) : ''
+    };
+    
+    if (cleanVersion.id && cleanVersion.title) {
+      socket.to(roomName).emit('remote_workspace_version_saved', cleanVersion);
+    }
+  });
+
+  socket.on('workspace_version_deleted', ({ roomName, versionId }) => {
+    if (!roomName || typeof versionId !== 'string') return;
+    socket.to(roomName).emit('remote_workspace_version_deleted', {
+      versionId: versionId.slice(0, 80)
+    });
+  });
+
+  socket.on('workspace_lock_changed', ({ roomName, locked, lockedBy }) => {
+    if (!roomName) return;
+    socket.to(roomName).emit('remote_workspace_lock_changed', {
+      locked: !!locked,
+      lockedBy: typeof lockedBy === 'string' ? lockedBy.slice(0, 80) : 'Peer'
+    });
+  });
+
   socket.on('toggle_screenshare', ({ isSharing }) => {
     if (currentRoom) {
       const list = roomParticipants[currentRoom] || [];

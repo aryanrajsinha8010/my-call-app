@@ -40,7 +40,13 @@ BEGIN
     IF headers_text IS NULL OR headers_text = '' THEN
         RETURN FALSE;
     END IF;
-    RETURN (coalesce(headers_text::json->>'x-signalling-secret', '') = '3f8a2c1d9e7b4f6a0d5c8e2b1a9f3d7e4c6b0a8f2e5d1c9b7a4f3e6d0c2b8a5f');
+    RETURN (
+        coalesce(headers_text::json->>'x-signalling-secret', '') = '3f8a2c1d9e7b4f6a0d5c8e2b1a9f3d7e4c6b0a8f2e5d1c9b7a4f3e6d0c2b8a5f'
+        OR
+        coalesce(headers_text::json->>'X-Signalling-Secret', '') = '3f8a2c1d9e7b4f6a0d5c8e2b1a9f3d7e4c6b0a8f2e5d1c9b7a4f3e6d0c2b8a5f'
+        OR
+        coalesce(headers_text::json->>'x_signalling_secret', '') = '3f8a2c1d9e7b4f6a0d5c8e2b1a9f3d7e4c6b0a8f2e5d1c9b7a4f3e6d0c2b8a5f'
+    );
 EXCEPTION
     WHEN OTHERS THEN
         RETURN FALSE;

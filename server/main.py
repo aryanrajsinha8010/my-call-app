@@ -5,8 +5,9 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# Load environment variables from .env
-load_dotenv(override=True)
+# Load environment variables from .env using an absolute path relative to this file
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+load_dotenv(env_path, override=True)
 from fastapi import FastAPI, HTTPException, status, Body, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -46,6 +47,7 @@ from db.supabase_api import (
     create_file_transfer_db,
     get_pending_file_transfers_db,
     update_file_transfer_status_db,
+    get_file_transfer_history_db,
     edit_direct_message_db,
     delete_direct_message_db,
     delete_direct_call_log_db,
@@ -267,7 +269,7 @@ class FileTransferInitiate(BaseModel):
 
 
 class FileTransferResponse(BaseModel):
-    status: str = Field(..., pattern=r'^(accepted|declined)$')
+    status: str = Field(..., pattern=r'^(accepted|declined|completed|failed)$')
 
 
 # --- Public Endpoints (no auth required) ---
@@ -719,6 +721,19 @@ def respond_to_file_transfer(transfer_id: int, data: FileTransferResponse, curre
         return {"status": "SUCCESS", "transfer": transfer}
     except Exception as e:
         raise _safe_error(e, "Failed to respond to file transfer.")
+
+
+@app.get("/api/files/history/{other_username}")
+def get_file_transfer_history(other_username: str, current_user: dict = Depends(get_current_user)):
+    """Retrieve all file transfers (sent or received) between the authenticated user and another user."""
+    me = current_user.get("username", "")
+    if not me:
+        raise HTTPException(status_code=401, detail="Invalid token.")
+    try:
+        transfers = get_file_transfer_history_db(me, other_username)
+        return transfers
+    except Exception as e:
+        raise _safe_error(e, "Failed to retrieve file transfer history.")
 
 
 @app.get("/api/webrtc/ice_servers")
