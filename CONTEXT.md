@@ -106,7 +106,8 @@ e:\calls\
 │   │   ├── components/
 │   │   │   ├── Whiteboard.tsx      # Collaborative canvas (multi-user drawing)
 │   │   │   ├── ChaperoneOverlay.tsx # Remote control safety overlay
-│   │   │   └── DiagnosticsPanel.tsx # High-fidelity WebRTC telemetry & chaperone audit dashboard
+│   │   │   ├── DiagnosticsPanel.tsx # High-fidelity WebRTC telemetry & chaperone audit dashboard
+│   │   │   └── AiAssistantPanel.tsx # AI meeting transcription, translation & summary dashboard
 │   │   └── lib/                    # Shared utilities
 │   ├── .env                    # VITE_API_URL, VITE_WS_URL, VITE_AI_URL
 │   └── vite.config.ts

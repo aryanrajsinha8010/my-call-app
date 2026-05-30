@@ -10,8 +10,9 @@ load_dotenv(override=True)
 
 # SEC-02 FIX: Load Supabase credentials from environment variables.
 # Never hardcode API keys or project URLs in source code.
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://uejwhikwtjikrsbnaabo.supabase.co")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+# Also safely strip single/double quotes and whitespace to avoid dashboard mismatch issues.
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://uejwhikwtjikrsbnaabo.supabase.co").strip().strip("'\"")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip().strip("'\"")
 
 if not SUPABASE_ANON_KEY:
     raise RuntimeError(
@@ -25,7 +26,7 @@ def _headers(use_bearer=True):
         "apikey": SUPABASE_ANON_KEY,
         "Content-Type": "application/json"
     }
-    jwt_secret = os.getenv("JWT_SECRET_KEY", "").strip()
+    jwt_secret = os.getenv("JWT_SECRET_KEY", "").strip().strip("'\"")
     if jwt_secret:
         h["X-Signalling-Secret"] = jwt_secret
     if use_bearer:

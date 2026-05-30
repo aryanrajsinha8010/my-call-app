@@ -58,7 +58,8 @@ ENV = os.getenv("ENV", "development")
 IS_PRODUCTION = ENV == "production"
 
 # SEC-03 FIX: Load JWT secret from environment — fail fast if missing
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+# Safely strip quotes and whitespace to avoid environment mismatches.
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "").strip().strip("'\"")
 if not JWT_SECRET_KEY:
     raise RuntimeError("[Security] JWT_SECRET_KEY environment variable is not set.")
 JWT_ALGORITHM = "HS256"

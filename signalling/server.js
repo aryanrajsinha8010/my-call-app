@@ -56,12 +56,13 @@ function loadPushSubscriptionsFromFile() {
 
 /** Helper to get standard headers with X-Signalling-Secret for Supabase REST queries */
 function getSupabaseHeaders(contentType = null, prefer = null) {
+  const anonKey = (process.env.SUPABASE_ANON_KEY || '').trim().replace(/^['"]|['"]$/g, '');
   const headers = {
-    'apikey': process.env.SUPABASE_ANON_KEY.trim(),
-    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY.trim()}`
+    'apikey': anonKey,
+    'Authorization': `Bearer ${anonKey}`
   };
   if (process.env.JWT_SECRET_KEY) {
-    headers['X-Signalling-Secret'] = process.env.JWT_SECRET_KEY.trim();
+    headers['X-Signalling-Secret'] = process.env.JWT_SECRET_KEY.trim().replace(/^['"]|['"]$/g, '');
   }
   if (contentType) {
     headers['Content-Type'] = contentType;
@@ -622,7 +623,7 @@ function sanitizeShape(shape) {
 // --- SEC-19 FIX: Authenticate Socket.IO connections via the Bearer token ---
 // The client must pass the JWT in the auth handshake. Connections without a
 // valid token are rejected immediately at the middleware level.
-const JWT_SECRET = process.env.JWT_SECRET_KEY;
+const JWT_SECRET = (process.env.JWT_SECRET_KEY || '').trim().replace(/^['"]|['"]$/g, '');
 
 function verifyJwt(token) {
   const [headerB64, payloadB64, sig] = token.split('.');

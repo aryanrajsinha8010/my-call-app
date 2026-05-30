@@ -36,7 +36,8 @@ def run_migration_file():
 
     # SEC-03 FIX: Dynamically inject the active JWT_SECRET_KEY from env variables into the migration SQL
     # so that the RLS is always in sync with the active server configuration.
-    jwt_secret = os.getenv("JWT_SECRET_KEY", "").strip()
+    # Safely strip quotes and whitespace.
+    jwt_secret = os.getenv("JWT_SECRET_KEY", "").strip().strip("'\"")
     if not jwt_secret:
         print("[Warning] JWT_SECRET_KEY is missing from environment. Using default fallback key for RLS.")
     else:
