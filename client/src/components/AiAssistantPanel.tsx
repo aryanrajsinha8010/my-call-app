@@ -1,4 +1,3 @@
-import React from 'react';
 import { Sparkles, Download, Languages, Globe, CheckSquare } from 'lucide-react';
 
 export interface TranscriptEntry {

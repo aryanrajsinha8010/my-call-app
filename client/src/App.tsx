@@ -8,7 +8,7 @@ import {
   AlertTriangle, Headphones, Copy, PhoneCall,
   LayoutGrid, LayoutPanelLeft, LayoutPanelTop, PictureInPicture2, Columns2, Columns3, Paperclip,
   Plus, User, BookUser, ImagePlus, Save, Pin, PinOff, Maximize2, Scan, MousePointer, Keyboard,
-  Bell, Download, Trash, Sparkles, Globe, CheckSquare, Languages
+  Bell, Download, Trash, Sparkles
 } from 'lucide-react';
 import { useWebRTC, Participant } from './hooks/useWebRTC.ts';
 import { useAudioPipeline } from './hooks/useAudioPipeline.ts';
