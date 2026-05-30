@@ -180,7 +180,7 @@ The entire front-end lives in **one file**: `e:\calls\client\src\App.tsx`.
 | `inboxNotifications` | `InboxItem[]` | Notification inbox (calls, msgs) |
 | `incomingCall` | `IncomingCallData \| null` | Incoming call modal data |
 | `chatMessages` | `ChatMessage[]` | Room chat messages (ephemeral) |
-| `activeTab` | `Tab` | Right panel tab in room view (`chat` \| `audio` \| `whiteboard` \| `control` \| `participants` \| `profile` \| `contacts` \| `diagnostics`) |
+| `activeTab` | `Tab` | Right panel tab in room view (`chat` \| `audio` \| `whiteboard` \| `control` \| `participants` \| `profile` \| `contacts` \| `diagnostics` \| `ai`) |
 | `streamLayout` | `'auto' \| 'pip-remote' \| 'pip-local' \| 'equal' \| 'horizontal'` | Video layout |
 | `notifPermission` | `NotificationPermission` | OS push permission state |
 
@@ -673,6 +673,6 @@ Each fix is tagged with a `SEC-XX` comment in the source:
 
 ---
 
-*Last updated: 2026-05-30 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented dynamic Adaptive Bitrate Control (ABR) system for WebRTC media streams; integrated statistics polling loop checking outbound-rtp / candidate-pair network latency in `useWebRTC.ts`; implemented automatic profile adaptation for HD, SD, Low Bandwidth, and Audio-Only modes; added smooth transition debouncing / fast degradation; created premium UI quality overlay indicators, floating stage status badges, interactive manual menu selectors, and desktop toast alerts for automatic quality shifts in `App.tsx` and custom toolbar control grids).*
+*Last updated: 2026-05-30 — Updated by NexaLink Autonomous Evolution Agent (Designed and implemented high-fidelity real-time AI captioning, translation, and meeting intelligence panel. Developed Web Speech API integration with intelligent fallback to a robust offline Speech Simulator; added translation pipelines mapping spoken dialogue to multiple target languages (ES, FR, DE, JA); built premium active-caption overlay badges directly on local and remote video tiles featuring subtle micro-animations and adaptive positioning; designed a dedicated sidebar tab for the 'AI Assistant' (`AiAssistantPanel.tsx`) displaying live, scrollable meeting transcripts, translation selectors, real-time AI summary extraction, offline regex-based action-item parsing, and a one-click Markdown dialogue log export system).*
 
 

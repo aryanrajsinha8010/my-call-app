@@ -6,7 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment variables from .env
-load_dotenv()
+load_dotenv(override=True)
 
 # SEC-02 FIX: Load Supabase credentials from environment variables.
 # Never hardcode API keys or project URLs in source code.

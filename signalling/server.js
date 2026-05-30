@@ -11,8 +11,8 @@ import webpush from 'web-push';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-dotenv.config({ path: path.join(__dirname, '..', 'server', '.env') });
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, '..', 'server', '.env'), override: true });
+dotenv.config({ override: true });
 
 const app = express();
 app.use(express.json({ limit: '64kb' }));  // needed to parse push subscription body

@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
 # Load server environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -33,6 +33,15 @@ def run_migration_file():
 
     with open(migration_path, "r") as f:
         sql_content = f.read()
+
+    # SEC-03 FIX: Dynamically inject the active JWT_SECRET_KEY from env variables into the migration SQL
+    # so that the RLS is always in sync with the active server configuration.
+    jwt_secret = os.getenv("JWT_SECRET_KEY", "").strip()
+    if not jwt_secret:
+        print("[Warning] JWT_SECRET_KEY is missing from environment. Using default fallback key for RLS.")
+    else:
+        print(f"[System] Dynamically binding RLS to active JWT_SECRET_KEY...")
+        sql_content = sql_content.replace('3f8a2c1d9e7b4f6a0d5c8e2b1a9f3d7e4c6b0a8f2e5d1c9b7a4f3e6d0c2b8a5f', jwt_secret)
 
     # Split SQL file into statements by semicolon, avoiding trigger blocks
     # A simple split could break plpgsql functions, so we split using a robust regex or execute as block
