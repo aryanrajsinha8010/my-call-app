@@ -127,6 +127,61 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+# --- Startup: Auto-sync Supabase RLS policies on every boot ---
+# This replicates what start.bat → db_optimize.py does locally.
+# Without this, the deployed Render server never applies the RLS migration,
+# causing is_signalling_server() to return FALSE and silently blocking
+# all table operations (rooms, contacts, messages, call logs, etc.).
+
+@app.on_event("startup")
+def run_startup_migrations():
+    """Apply Supabase schema migrations on startup to sync RLS policies."""
+    DATABASE_URL = os.getenv("DATABASE_URL", "")
+    if not DATABASE_URL:
+        logger.warning("[Startup] DATABASE_URL not set — skipping RLS migration sync.")
+        return
+
+    migration_candidates = [
+        # Primary: inside server/ directory (deployed to Render)
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations", "supabase_schema.sql"),
+        # Fallback: monorepo infra/ path (local development via start.bat)
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "infra", "migrations", "supabase_schema.sql"),
+    ]
+
+    sql_content = None
+    for path in migration_candidates:
+        norm = os.path.normpath(path)
+        if os.path.exists(norm):
+            with open(norm, "r") as f:
+                sql_content = f.read()
+            logger.info(f"[Startup] Loaded migration SQL from: {norm}")
+            break
+
+    if not sql_content:
+        logger.warning("[Startup] supabase_schema.sql not found — skipping RLS sync.")
+        return
+
+    # Dynamically inject the active JWT_SECRET_KEY into the RLS function
+    if JWT_SECRET_KEY:
+        sql_content = sql_content.replace(
+            '3f8a2c1d9e7b4f6a0d5c8e2b1a9f3d7e4c6b0a8f2e5d1c9b7a4f3e6d0c2b8a5f',
+            JWT_SECRET_KEY
+        )
+        logger.info("[Startup] Injected active JWT_SECRET_KEY into RLS policies.")
+
+    try:
+        from sqlalchemy import create_engine
+        engine = create_engine(DATABASE_URL)
+        with engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN;")
+            conn.exec_driver_sql(sql_content)
+            conn.exec_driver_sql("COMMIT;")
+        engine.dispose()
+        logger.info("[Startup] ✓ Supabase RLS policies synchronized successfully.")
+    except Exception as e:
+        logger.error(f"[Startup] RLS migration failed (non-fatal): {e}")
+
+
 # --- JWT Auth Helpers (SEC-04) ---
 
 def create_access_token(data: dict) -> str:
