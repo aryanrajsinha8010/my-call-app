@@ -339,6 +339,115 @@ def read_health():
     }
 
 
+# TEMPORARY: Diagnostic endpoint to debug deployment RLS issues
+@app.get("/api/debug/rls")
+def debug_rls_status():
+    """Temporary debug endpoint — tests Supabase RLS from Render's perspective."""
+    import urllib.request
+    import urllib.error
+    import json as _json
+
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().strip("'\"")
+    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip().strip("'\"")
+    jwt_secret = os.getenv("JWT_SECRET_KEY", "").strip().strip("'\"")
+    db_url = os.getenv("DATABASE_URL", "")
+
+    results = {
+        "env_check": {
+            "SUPABASE_URL_set": bool(SUPABASE_URL),
+            "SUPABASE_URL_value": SUPABASE_URL[:40] + "..." if SUPABASE_URL else "",
+            "SUPABASE_ANON_KEY_set": bool(SUPABASE_ANON_KEY),
+            "SUPABASE_ANON_KEY_prefix": SUPABASE_ANON_KEY[:20] + "..." if SUPABASE_ANON_KEY else "",
+            "JWT_SECRET_KEY_set": bool(jwt_secret),
+            "JWT_SECRET_KEY_prefix": jwt_secret[:10] + "..." if jwt_secret else "",
+            "DATABASE_URL_set": bool(db_url),
+            "ENV": os.getenv("ENV", "not set"),
+        },
+        "migration_file_exists": False,
+        "rls_test_with_header": None,
+        "rls_test_without_header": None,
+        "profiles_test": None,
+    }
+
+    # Check if migration file exists
+    migration_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations", "supabase_schema.sql")
+    results["migration_file_exists"] = os.path.exists(migration_path)
+    results["migration_file_path"] = migration_path
+
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        results["error"] = "Missing SUPABASE_URL or SUPABASE_ANON_KEY"
+        return results
+
+    # Test 1: Query contacts WITH signalling header
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/contacts?limit=3"
+        headers_with = {
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+            "Content-Type": "application/json",
+            "X-Signalling-Secret": jwt_secret,
+            "x-signalling-secret": jwt_secret,
+        }
+        req = urllib.request.Request(url, headers=headers_with)
+        with urllib.request.urlopen(req) as resp:
+            data = _json.loads(resp.read().decode())
+            results["rls_test_with_header"] = {"count": len(data), "status": "OK"}
+    except Exception as e:
+        results["rls_test_with_header"] = {"error": str(e)}
+
+    # Test 2: Query contacts WITHOUT signalling header
+    try:
+        headers_without = {
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+            "Content-Type": "application/json",
+        }
+        req2 = urllib.request.Request(url, headers=headers_without)
+        with urllib.request.urlopen(req2) as resp:
+            data = _json.loads(resp.read().decode())
+            results["rls_test_without_header"] = {"count": len(data), "status": "OK"}
+    except Exception as e:
+        results["rls_test_without_header"] = {"error": str(e)}
+
+    # Test 3: Query user_profiles (has public SELECT policy)
+    try:
+        url3 = f"{SUPABASE_URL}/rest/v1/user_profiles?select=username&limit=3"
+        req3 = urllib.request.Request(url3, headers=headers_without)
+        with urllib.request.urlopen(req3) as resp:
+            data = _json.loads(resp.read().decode())
+            results["profiles_test"] = {"count": len(data), "status": "OK"}
+    except Exception as e:
+        results["profiles_test"] = {"error": str(e)}
+
+    # Test 4: Check if is_signalling_server() function exists via direct DB
+    if db_url:
+        try:
+            from sqlalchemy import create_engine, text
+            engine = create_engine(db_url)
+            with engine.connect() as conn:
+                row = conn.execute(text(
+                    "SELECT COUNT(*) FROM pg_proc WHERE proname = 'is_signalling_server'"
+                )).fetchone()
+                results["is_signalling_server_exists"] = row[0] > 0 if row else False
+
+                # Check RLS status on contacts table
+                row2 = conn.execute(text(
+                    "SELECT relrowsecurity FROM pg_class WHERE relname = 'contacts'"
+                )).fetchone()
+                results["contacts_rls_enabled"] = row2[0] if row2 else "table not found"
+
+                # Count RLS policies on contacts
+                row3 = conn.execute(text(
+                    "SELECT COUNT(*) FROM pg_policies WHERE tablename = 'contacts'"
+                )).fetchone()
+                results["contacts_policy_count"] = row3[0] if row3 else 0
+            engine.dispose()
+        except Exception as e:
+            results["db_check_error"] = str(e)
+
+    return results
+
+
 # REST Endpoint: Secure User Registration via Supabase Auth
 # SEC-10 FIX: Rate limited to 5 requests per minute per IP
 @app.post("/api/auth/register")
