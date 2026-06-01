@@ -3596,49 +3596,60 @@ export default function App() {
     }
   }, [selectedAudioOutput, applyAudioOutput]);
 
-  useEffect(() => {
-    const videoEl = localVideoRef.current;
-    if (videoEl) {
-      videoEl.srcObject = localStream;
-    }
-    return () => {
-      if (videoEl) {
-        videoEl.srcObject = null;
+  // Callback-ref approach for local self camera video: sets srcObject and event listeners immediately
+  const localVideoCallbackRef = useCallback(
+    (el: HTMLVideoElement | null) => {
+      localVideoRef.current = el;
+      if (el && localStream) {
+        el.srcObject = localStream;
+        el.play().catch(() => {});
+        
+        // Setup listener sync directly inside the callback ref
+        const handleEnter = () => setIsPipActive(true);
+        const handleLeave = () => setIsPipActive(false);
+        el.addEventListener('enterpictureinpicture', handleEnter);
+        el.addEventListener('leavepictureinpicture', handleLeave);
+        
+        (el as any)._pipCleanup = () => {
+          el.removeEventListener('enterpictureinpicture', handleEnter);
+          el.removeEventListener('leavepictureinpicture', handleLeave);
+        };
+      } else if (el) {
+        el.srcObject = null;
+        if ((el as any)._pipCleanup) {
+          (el as any)._pipCleanup();
+        }
       }
-    };
-  }, [localStream, inRoom]);
+    },
+    [localStream]
+  );
 
-  // Use a callback-ref approach for screen video: sets srcObject immediately
-  // when the DOM element mounts, avoiding the race condition where the
-  // useEffect runs before the tile is rendered.
+  // Callback-ref approach for screen video: sets srcObject and event listeners immediately
   const screenVideoCallbackRef = useCallback(
     (el: HTMLVideoElement | null) => {
       screenVideoRef.current = el;
       if (el && screenStream) {
         el.srcObject = screenStream;
-        el.play().catch(() => {/* autoplay blocked, user will see muted */});
+        el.play().catch(() => {});
+        
+        const handleEnter = () => setIsPipActive(true);
+        const handleLeave = () => setIsPipActive(false);
+        el.addEventListener('enterpictureinpicture', handleEnter);
+        el.addEventListener('leavepictureinpicture', handleLeave);
+        
+        (el as any)._pipCleanup = () => {
+          el.removeEventListener('enterpictureinpicture', handleEnter);
+          el.removeEventListener('leavepictureinpicture', handleLeave);
+        };
       } else if (el) {
         el.srcObject = null;
+        if ((el as any)._pipCleanup) {
+          (el as any)._pipCleanup();
+        }
       }
     },
     [screenStream]
   );
-
-  // Fallback: when screenStream changes while the element is already mounted
-  useEffect(() => {
-    const videoEl = screenVideoRef.current;
-    if (videoEl) {
-      videoEl.srcObject = screenStream;
-      if (screenStream) {
-        videoEl.play().catch(() => {});
-      }
-    }
-    return () => {
-      if (videoEl) {
-        videoEl.srcObject = null;
-      }
-    };
-  }, [screenStream]);
 
   /* ── Picture-in-Picture (PiP) Handlers ── */
   const [isPipActive, setIsPipActive] = useState(false);
@@ -3684,34 +3695,7 @@ export default function App() {
     }
   };
 
-  // Sync state if user exits PiP using the browser's native overlay button
-  useEffect(() => {
-    const handleEnterPip = () => setIsPipActive(true);
-    const handleLeavePip = () => setIsPipActive(false);
 
-    const localEl = localVideoRef.current;
-    const screenEl = screenVideoRef.current;
-
-    if (localEl) {
-      localEl.addEventListener('enterpictureinpicture', handleEnterPip);
-      localEl.addEventListener('leavepictureinpicture', handleLeavePip);
-    }
-    if (screenEl) {
-      screenEl.addEventListener('enterpictureinpicture', handleEnterPip);
-      screenEl.addEventListener('leavepictureinpicture', handleLeavePip);
-    }
-
-    return () => {
-      if (localEl) {
-        localEl.removeEventListener('enterpictureinpicture', handleEnterPip);
-        localEl.removeEventListener('leavepictureinpicture', handleLeavePip);
-      }
-      if (screenEl) {
-        screenEl.removeEventListener('enterpictureinpicture', handleEnterPip);
-        screenEl.removeEventListener('leavepictureinpicture', handleLeavePip);
-      }
-    };
-  }, [localStream, screenStream]);
 
   // Automatic PiP trigger on page minimize or tab change
   useEffect(() => {
@@ -5095,7 +5079,7 @@ export default function App() {
                       /* Video Preview */
                       <div className="relative aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-slate-950">
                         {localStream ? (
-                          <video ref={localVideoRef} autoPlay playsInline muted
+                          <video ref={localVideoCallbackRef} autoPlay playsInline muted
                             className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
                         ) : (
                           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
@@ -6401,6 +6385,35 @@ export default function App() {
                     disabled={locallyHiddenPeers.length === 0}>
                     <Eye className="w-3.5 h-3.5" /> Show All
                   </button>
+
+                  {/* Hidden stream unhide pill buttons */}
+                  {locallyHiddenPeers.map(id => {
+                    let displayName = '';
+                    if (id === 'self') {
+                      displayName = 'Self (You)';
+                    } else if (id === 'screen') {
+                      displayName = 'Screen Share';
+                    } else {
+                      const p = participants.find(part => part.id === id);
+                      displayName = p ? p.name : 'Peer';
+                    }
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => setLocallyHiddenPeers(prev => prev.filter(x => x !== id))}
+                        className="nx-badge flex items-center gap-1 cursor-pointer transition active:scale-95 text-[10px] py-1 px-2.5 rounded-lg border animate-fade-in"
+                        style={{
+                          background: 'rgba(16,185,129,0.1)',
+                          borderColor: 'rgba(16,185,129,0.3)',
+                          color: '#34d399',
+                          fontWeight: 600
+                        }}
+                        title={`Show ${displayName} again`}
+                      >
+                        <Eye className="w-3 h-3 text-emerald-400" /> Show {displayName}
+                      </button>
+                    );
+                  })}
                 </div>
                 <span className="text-3xs font-mono text-slate-500">
                   {orderedParticipants.length + 1} visible · {locallyHiddenPeers.length} hidden
@@ -6441,8 +6454,9 @@ export default function App() {
                   ),
                 }}>
 
-                {/* Active Tiles ordered according to custom tileOrder (draggable/re-orderable) */}
                 {tileOrder.map((tileId) => {
+                  if (locallyHiddenPeers.includes(tileId)) return null;
+
                   if (tileId === 'self') {
                     return (
                       <div
@@ -6477,7 +6491,7 @@ export default function App() {
                             <button onClick={() => toggleLocalHide('self')} className="text-[9px] text-indigo-400 hover:text-indigo-300 font-bold mt-1">Unhide Stream</button>
                           </div>
                         )}
-                        <video ref={localVideoRef} autoPlay playsInline muted draggable={false}
+                        <video ref={localVideoCallbackRef} autoPlay playsInline muted draggable={false}
                           {...({ autoPictureInPicture: autoPipEnabled } as any)}
                           className={`w-full h-full ${videoFitClass} ${videoEnabled ? '' : 'opacity-0'}`} style={{ transform: 'scaleX(-1)', minHeight: 220 }} />
 
@@ -6589,7 +6603,7 @@ export default function App() {
                       >
                         <video ref={screenVideoCallbackRef} autoPlay playsInline muted draggable={false}
                           {...({ autoPictureInPicture: autoPipEnabled } as any)}
-                          className={`w-full h-full ${fitMode === 'cover' ? 'object-cover' : 'object-contain'}`} />
+                          className="w-full h-full object-contain bg-slate-950/80 backdrop-blur-2xs" />
                         <div className="absolute top-3 left-3">
                           <span className="nx-badge nx-badge-rose">
                             <Monitor className="w-2.5 h-2.5" /> Sharing Screen
