@@ -3662,12 +3662,14 @@ export default function App() {
           const el = screenVideoRef.current;
           // Ensure srcObject is set (may not be if callback ref hasn't fired yet)
           if (!el.srcObject) el.srcObject = screenStream;
+          await el.play().catch(() => {});
           await ensureVideoReady(el);
           await el.requestPictureInPicture();
           setIsPipActive(true);
         } else if (videoEnabled && localVideoRef.current) {
           const el = localVideoRef.current;
           if (!el.srcObject) el.srcObject = localStream;
+          await el.play().catch(() => {});
           await ensureVideoReady(el);
           await el.requestPictureInPicture();
           setIsPipActive(true);
@@ -6359,6 +6361,7 @@ export default function App() {
                 style={{
                   minHeight: 280,
                   height: '100%',
+                  position: (streamLayout === 'pip-remote' || streamLayout === 'pip-local') ? 'relative' : undefined,
                   ...(streamLayout === 'auto'
                     ? {
                         gridTemplateColumns: totalVisibleTiles <= 1 ? '1fr' : 'repeat(2, 1fr)',

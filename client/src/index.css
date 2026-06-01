@@ -2436,6 +2436,15 @@ body,
   line-height: 1.3;
 }
 
+/* Custom utility overrides to prevent Tailwind purging dynamic class names */
+.relative {
+  position: relative !important;
+}
+.absolute {
+  position: absolute !important;
+}
+
+
 
 
 
