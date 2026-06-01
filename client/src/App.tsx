@@ -3521,6 +3521,7 @@ export default function App() {
   /* ── Video refs ─────────────────────── */
   const localVideoRef  = useRef<HTMLVideoElement | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement | null>(null);
+  const wasAutoPipTriggeredRef = useRef<boolean>(false);
 
   const enumerateDevices = useCallback(async () => {
     try {
@@ -3726,6 +3727,7 @@ export default function App() {
               await ensureVideoReady(el);
               await el.requestPictureInPicture();
               setIsPipActive(true);
+              wasAutoPipTriggeredRef.current = true;
             }
           } else if (videoEnabled && localVideoRef.current) {
             const el = localVideoRef.current;
@@ -3734,17 +3736,21 @@ export default function App() {
               await ensureVideoReady(el);
               await el.requestPictureInPicture();
               setIsPipActive(true);
+              wasAutoPipTriggeredRef.current = true;
             }
           }
         } catch (err) {
-          console.warn('[PiP] Auto PiP enter on minimize failed:', err);
+          // Graceful fallback: some browsers reject programmatic requestPictureInPicture on hidden without a gesture.
+          // In those cases, we rely on the native autoPictureInPicture HTML attribute or the Media Session handlers.
+          console.log('[PiP] Programmatic Auto PiP enter on minimize skipped (browser policy):', (err as any).message || err);
         }
       } else {
         try {
-          if (document.pictureInPictureElement) {
+          if (document.pictureInPictureElement && wasAutoPipTriggeredRef.current) {
             await document.exitPictureInPicture();
             setIsPipActive(false);
           }
+          wasAutoPipTriggeredRef.current = false;
         } catch (err) {
           console.warn('[PiP] Auto PiP exit on focus failed:', err);
         }
@@ -3754,6 +3760,64 @@ export default function App() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [autoPipEnabled, inRoom, screenStream, videoEnabled]);
+
+  // Media Session automatic Picture-in-Picture action handlers
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !inRoom) return;
+
+    const handleEnterPip = async () => {
+      if (!autoPipEnabled) return;
+      try {
+        if (screenStream && screenVideoRef.current) {
+          const el = screenVideoRef.current;
+          if (document.pictureInPictureElement !== el) {
+            if (!el.srcObject) el.srcObject = screenStream;
+            await ensureVideoReady(el);
+            await el.requestPictureInPicture();
+            setIsPipActive(true);
+            wasAutoPipTriggeredRef.current = true;
+          }
+        } else if (videoEnabled && localVideoRef.current) {
+          const el = localVideoRef.current;
+          if (document.pictureInPictureElement !== el) {
+            if (!el.srcObject) el.srcObject = localStream;
+            await ensureVideoReady(el);
+            await el.requestPictureInPicture();
+            setIsPipActive(true);
+            wasAutoPipTriggeredRef.current = true;
+          }
+        }
+      } catch (err) {
+        console.warn('[PiP] MediaSession enterpictureinpicture action failed:', err);
+      }
+    };
+
+    const handleLeavePip = async () => {
+      try {
+        if (document.pictureInPictureElement) {
+          await document.exitPictureInPicture();
+          setIsPipActive(false);
+        }
+        wasAutoPipTriggeredRef.current = false;
+      } catch (err) {
+        console.warn('[PiP] MediaSession leavepictureinpicture action failed:', err);
+      }
+    };
+
+    try {
+      navigator.mediaSession.setActionHandler('enterpictureinpicture' as any, handleEnterPip);
+      navigator.mediaSession.setActionHandler('leavepictureinpicture' as any, handleLeavePip);
+    } catch (err) {
+      console.warn('[PiP] MediaSession action registration failed:', err);
+    }
+
+    return () => {
+      try {
+        navigator.mediaSession.setActionHandler('enterpictureinpicture' as any, null);
+        navigator.mediaSession.setActionHandler('leavepictureinpicture' as any, null);
+      } catch (e) {}
     };
   }, [autoPipEnabled, inRoom, screenStream, videoEnabled]);
 
@@ -6414,6 +6478,7 @@ export default function App() {
                           </div>
                         )}
                         <video ref={localVideoRef} autoPlay playsInline muted draggable={false}
+                          {...({ autoPictureInPicture: autoPipEnabled } as any)}
                           className={`w-full h-full ${videoFitClass} ${videoEnabled ? '' : 'opacity-0'}`} style={{ transform: 'scaleX(-1)', minHeight: 220 }} />
 
                         {!videoEnabled && (
@@ -6523,6 +6588,7 @@ export default function App() {
                         }}
                       >
                         <video ref={screenVideoCallbackRef} autoPlay playsInline muted draggable={false}
+                          {...({ autoPictureInPicture: autoPipEnabled } as any)}
                           className={`w-full h-full ${fitMode === 'cover' ? 'object-cover' : 'object-contain'}`} />
                         <div className="absolute top-3 left-3">
                           <span className="nx-badge nx-badge-rose">
