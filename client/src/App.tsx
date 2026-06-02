@@ -428,7 +428,8 @@ export default function App() {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizingRef.current) return;
       const newWidth = window.innerWidth - e.clientX - 24;
-      if (newWidth > 200 && newWidth < 800) {
+      const maxSidebarWidth = isLinkedToShareScreen ? window.innerWidth - 300 : 800;
+      if (newWidth > 200 && newWidth < maxSidebarWidth) {
         setSidebarWidth(newWidth);
       }
     };
@@ -447,7 +448,7 @@ export default function App() {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, []);
+  }, [isLinkedToShareScreen]);
 
   /* Chat */
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -6676,15 +6677,15 @@ export default function App() {
               */}
               {isLinkedToShareScreen ? (
                 /* ── LINKED SHARE SCREEN FOCUS VIEW ── */
-                <div className="flex-1 flex flex-col gap-4 min-h-0 relative">
+                <div className="flex-1 flex flex-row gap-4 min-h-0 relative">
                   
-                  {/* ── SCROLLABLE VIDEO RIBBON (HORIZONTAL STRIP) ── */}
-                  <div className="flex gap-3 overflow-x-auto pb-2 px-1 min-h-[110px] items-center bg-slate-950/40 p-2.5 rounded-2xl border border-white/5 backdrop-blur-md">
+                  {/* ── SCROLLABLE VIDEO RIBBON (VERTICAL STRIP) ── */}
+                  <div className="flex flex-col gap-3 overflow-y-auto w-36 pr-1 bg-slate-950/40 p-2.5 rounded-2xl border border-white/5 backdrop-blur-md">
                     {/* Render Self Camera in Ribbon if not selected */}
                     {linkedStreamId !== 'self' && !locallyHiddenPeers.includes('self') && (
                       <div 
                         onClick={() => setLinkedStreamId('self')}
-                        className="flex-shrink-0 w-32 aspect-video rounded-xl overflow-hidden border border-white/10 hover:border-[var(--nx-primary)]/50 transition cursor-pointer relative group bg-slate-900"
+                        className="flex-shrink-0 w-full aspect-video rounded-xl overflow-hidden border border-white/10 hover:border-[var(--nx-primary)]/50 transition cursor-pointer relative group bg-slate-900"
                       >
                         <video ref={localVideoCallbackRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
                         <div className="absolute bottom-1 left-1.5 right-1.5 flex items-center justify-between text-[8px] bg-slate-950/80 px-1 py-0.5 rounded text-white font-semibold">
@@ -6697,7 +6698,7 @@ export default function App() {
                     {screenStream && linkedStreamId !== 'screen' && (
                       <div 
                         onClick={() => setLinkedStreamId('screen')}
-                        className="flex-shrink-0 w-32 aspect-video rounded-xl overflow-hidden border border-white/10 hover:border-[var(--nx-primary)]/50 transition cursor-pointer relative group bg-slate-900"
+                        className="flex-shrink-0 w-full aspect-video rounded-xl overflow-hidden border border-white/10 hover:border-[var(--nx-primary)]/50 transition cursor-pointer relative group bg-slate-900"
                       >
                         <video ref={screenVideoCallbackRef} autoPlay playsInline muted className="w-full h-full object-contain" />
                         <div className="absolute bottom-1 left-1.5 right-1.5 flex items-center justify-between text-[8px] bg-slate-950/80 px-1 py-0.5 rounded text-white font-semibold">
@@ -6712,7 +6713,7 @@ export default function App() {
                       return (
                         <div 
                           key={peer.id}
-                          className="flex-shrink-0 w-32 aspect-video rounded-xl overflow-hidden border border-white/10 transition relative bg-slate-900 flex flex-col items-center justify-center p-2"
+                          className="flex-shrink-0 w-full aspect-video rounded-xl overflow-hidden border border-white/10 transition relative bg-slate-900 flex flex-col items-center justify-center p-2"
                         >
                           {isValidProfilePic(getPeerProfilePic(peer)) ? (
                             <img src={getPeerProfilePic(peer)} alt={peer.name} className="w-8 h-8 rounded-full object-cover" />
@@ -6744,8 +6745,7 @@ export default function App() {
                     >
                       <div 
                         id="linked-video-box"
-                        className="relative aspect-video max-w-full max-h-full rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-slate-950 flex items-center justify-center"
-                        style={{ width: '100%', height: '100%', maxWidth: '853px', maxHeight: '480px' }} // Standard 16:9 box
+                        className="relative aspect-video w-full h-full max-w-full max-h-full rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-slate-950 flex items-center justify-center"
                       >
                         {linkedStreamId === 'self' ? (
                           <video ref={localVideoCallbackRef} autoPlay playsInline muted className="w-full h-full object-contain" style={{ transform: 'scaleX(-1)' }} />
