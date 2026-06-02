@@ -367,6 +367,27 @@ export default function App() {
   const [isOverlayDrawing, setIsOverlayDrawing] = useState(false);
   const overlayLastPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const draggingHandleIdxRef = useRef<number | null>(null);
+
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const whiteboardPersistRef = useRef<{
+    canvasDataUrl: string | null;
+    history: string[];
+    redoStack: string[];
+    color: string;
+    brushSize: number;
+    tool: 'pen' | 'eraser' | 'text' | 'image' | 'rectangle' | 'circle' | 'line' | 'arrow' | 'laser';
+    fillShapes: boolean;
+    fontSize: number;
+  }>({
+    canvasDataUrl: null,
+    history: [],
+    redoStack: [],
+    color: '#dcb16b',
+    brushSize: 4,
+    tool: 'pen',
+    fillShapes: false,
+    fontSize: 16,
+  });
   
   // Track container pixel dimensions for accurate perspective calculations
   const [containerSize, setContainerSize] = useState({ width: 853, height: 480 });
@@ -449,6 +470,24 @@ export default function App() {
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isLinkedToShareScreen]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('msfullscreenchange', handleFullscreenChange);
+    // Initial sync
+    setIsFullscreen(!!document.fullscreenElement);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('msfullscreenchange', handleFullscreenChange);
+    };
+  }, []);
 
   /* Chat */
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -7513,6 +7552,46 @@ export default function App() {
                   </div>
                 </div>
               )}
+
+              {/* Floating Whiteboard in Fullscreen Mode */}
+              {isFullscreen && isLinkedToShareScreen && (
+                <div 
+                  className="absolute bottom-6 right-6 w-[550px] h-[480px] bg-slate-950/90 border border-white/10 rounded-3xl p-4 shadow-2xl z-50 backdrop-blur-xl animate-in zoom-in-95 duration-200 flex flex-col text-left"
+                  style={{ boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5)' }}
+                >
+                  <div className="flex items-center justify-between pb-3 mb-2 border-b border-white/5 flex-shrink-0">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-[var(--nx-primary)] animate-pulse" />
+                      <h4 className="text-xs font-bold text-slate-200 font-display">Floating Whiteboard</h4>
+                    </div>
+                    <button 
+                      onClick={() => openFullscreen()} 
+                      className="text-slate-400 hover:text-white transition p-1 hover:bg-white/5 rounded-lg"
+                      title="Exit Fullscreen to restore sidebar"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="flex-1 min-h-0 overflow-y-auto">
+                    <Whiteboard 
+                      socket={socket} 
+                      roomName={roomName} 
+                      e2eeKey={roomE2eeKey} 
+                      isLinkedToShareScreen={isLinkedToShareScreen}
+                      setIsLinkedToShareScreen={setIsLinkedToShareScreen}
+                      linkedStreamId={linkedStreamId}
+                      setLinkedStreamId={setLinkedStreamId}
+                      isCalibrating={isCalibrating}
+                      setIsCalibrating={setIsCalibrating}
+                      calibrationPoints={calibrationPoints}
+                      setCalibrationPoints={setCalibrationPoints}
+                      participants={participants}
+                      screenStream={screenStream}
+                      whiteboardPersistRef={whiteboardPersistRef}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Draggable Resizer Handle */}
@@ -7917,7 +7996,7 @@ export default function App() {
                 )}
 
                 {/* ── WHITEBOARD PANEL ── */}
-                {activeTab === 'whiteboard' && (
+                {activeTab === 'whiteboard' && !isFullscreen && (
                   <Whiteboard 
                     socket={socket} 
                     roomName={roomName} 
@@ -7932,6 +8011,7 @@ export default function App() {
                     setCalibrationPoints={setCalibrationPoints}
                     participants={participants}
                     screenStream={screenStream}
+                    whiteboardPersistRef={whiteboardPersistRef}
                   />
                 )}
 

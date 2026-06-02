@@ -33,6 +33,7 @@ interface WhiteboardProps {
   setCalibrationPoints?: (pts: Array<{x: number; y: number}>) => void;
   participants?: any[];
   screenStream?: MediaStream | null;
+  whiteboardPersistRef?: React.MutableRefObject<any>;
 }
 
 interface Stroke {
@@ -68,18 +69,19 @@ export default function Whiteboard({
   isCalibrating = false,
   setIsCalibrating,
   setCalibrationPoints,
-  screenStream = null
+  screenStream = null,
+  whiteboardPersistRef
 }: WhiteboardProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [color, setColor] = useState('#dcb16b'); // Start with the premium golden color
-  const [brushSize, setBrushSize] = useState(4);
-  const [tool, setTool] = useState<'pen' | 'eraser' | 'text' | 'image' | 'rectangle' | 'circle' | 'line' | 'arrow' | 'laser'>('pen');
-  const [fillShapes, setFillShapes] = useState(false);
+  const [color, setColor] = useState(() => whiteboardPersistRef?.current?.color || '#dcb16b'); // Start with the premium golden color
+  const [brushSize, setBrushSize] = useState(() => whiteboardPersistRef?.current?.brushSize || 4);
+  const [tool, setTool] = useState<'pen' | 'eraser' | 'text' | 'image' | 'rectangle' | 'circle' | 'line' | 'arrow' | 'laser'>(() => whiteboardPersistRef?.current?.tool || 'pen');
+  const [fillShapes, setFillShapes] = useState(() => whiteboardPersistRef?.current?.fillShapes || false);
   const [annotationText, setAnnotationText] = useState('Annotation');
-  const [fontSize, setFontSize] = useState(16);
+  const [fontSize, setFontSize] = useState(() => whiteboardPersistRef?.current?.fontSize || 16);
   const [imageUrl, setImageUrl] = useState('');
   const [imageWidth, setImageWidth] = useState(200);
   const [imageHeight, setImageHeight] = useState(150);
@@ -117,11 +119,40 @@ export default function Whiteboard({
   const userName = (typeof window !== 'undefined' ? sessionStorage.getItem('nexalink_username') : null) || 'Anonymous';
 
   // History Stacks for Local Undo/Redo
-  const [history, setHistory] = useState<string[]>([]);
-  const [redoStack, setRedoStack] = useState<string[]>([]);
+  const [history, setHistory] = useState<string[]>(() => whiteboardPersistRef?.current?.history || []);
+  const [redoStack, setRedoStack] = useState<string[]>(() => whiteboardPersistRef?.current?.redoStack || []);
   const lastPos = useRef({ x: 0, y: 0 });
   const startImageDataRef = useRef<ImageData | null>(null);
   const currentPos = useRef({ x: 0, y: 0 });
+
+  // Sync state parameters to persistRef on change
+  useEffect(() => {
+    if (whiteboardPersistRef?.current) {
+      whiteboardPersistRef.current.color = color;
+      whiteboardPersistRef.current.brushSize = brushSize;
+      whiteboardPersistRef.current.tool = tool;
+      whiteboardPersistRef.current.fillShapes = fillShapes;
+      whiteboardPersistRef.current.fontSize = fontSize;
+      whiteboardPersistRef.current.history = history;
+      whiteboardPersistRef.current.redoStack = redoStack;
+    }
+  }, [color, brushSize, tool, fillShapes, fontSize, history, redoStack, whiteboardPersistRef]);
+
+  // Redraw persistent canvas content on mount
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas && whiteboardPersistRef?.current?.canvasDataUrl) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const img = new window.Image();
+        img.src = whiteboardPersistRef.current.canvasDataUrl;
+        img.onload = () => {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+        };
+      }
+    }
+  }, [whiteboardPersistRef]);
 
   const drawShapeOnCtx = (
     ctx: CanvasRenderingContext2D,
@@ -428,8 +459,18 @@ export default function Whiteboard({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dataURL = canvas.toDataURL();
-    setHistory(prev => [...prev, dataURL]);
+    setHistory(prev => {
+      const next = [...prev, dataURL];
+      if (whiteboardPersistRef?.current) {
+        whiteboardPersistRef.current.history = next;
+      }
+      return next;
+    });
     setRedoStack([]); // Clear redo stack on new action
+    if (whiteboardPersistRef?.current) {
+      whiteboardPersistRef.current.redoStack = [];
+      whiteboardPersistRef.current.canvasDataUrl = dataURL;
+    }
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -725,6 +766,13 @@ export default function Whiteboard({
     }
     
     startImageDataRef.current = null;
+    
+    if (whiteboardPersistRef?.current) {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        whiteboardPersistRef.current.canvasDataUrl = canvas.toDataURL();
+      }
+    }
   };
 
   // Undo action
@@ -744,6 +792,9 @@ export default function Whiteboard({
     img.onload = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
+      if (whiteboardPersistRef?.current) {
+        whiteboardPersistRef.current.canvasDataUrl = previousState;
+      }
     };
   };
 
@@ -764,6 +815,9 @@ export default function Whiteboard({
     img.onload = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
+      if (whiteboardPersistRef?.current) {
+        whiteboardPersistRef.current.canvasDataUrl = nextState;
+      }
     };
   };
 
@@ -958,6 +1012,18 @@ export default function Whiteboard({
   useEffect(() => {
     if (!socket) return;
 
+    let lastPersistSync = 0;
+    const syncToPersist = (force = false) => {
+      const now = Date.now();
+      if (force || now - lastPersistSync > 300) {
+        lastPersistSync = now;
+        const canvas = canvasRef.current;
+        if (canvas && whiteboardPersistRef?.current) {
+          whiteboardPersistRef.current.canvasDataUrl = canvas.toDataURL();
+        }
+      }
+    };
+
     socket.on('remote_draw', async (stroke: Stroke | string) => {
       let finalStroke: Stroke;
       if (typeof stroke === 'string') {
@@ -994,6 +1060,8 @@ export default function Whiteboard({
         ctx.strokeStyle = convertPeachToGold(finalStroke.color);
         ctx.stroke();
       }
+      
+      syncToPersist(false);
     });
 
     socket.on('remote_clear', () => {
@@ -1001,6 +1069,9 @@ export default function Whiteboard({
       const ctx = getCanvasContext();
       if (canvas && ctx) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (whiteboardPersistRef?.current) {
+          whiteboardPersistRef.current.canvasDataUrl = null;
+        }
       }
     });
 
@@ -1046,6 +1117,7 @@ export default function Whiteboard({
       ctx.font = `${finalText.fontSize}px sans-serif`;
       ctx.fillStyle = convertPeachToGold(finalText.color);
       ctx.fillText(finalText.text, finalText.x, finalText.y);
+      syncToPersist(true);
     });
 
     socket.on('remote_image', async (imageData: { x: number; y: number; url: string; width: number; height: number } | string) => {
@@ -1074,6 +1146,7 @@ export default function Whiteboard({
       img.src = finalImage.url;
       img.onload = () => {
         ctx.drawImage(img, finalImage.x, finalImage.y, finalImage.width, finalImage.height);
+        syncToPersist(true);
       };
     });
 
@@ -1116,6 +1189,7 @@ export default function Whiteboard({
         finalShape.endY,
         finalShape.fill
       );
+      syncToPersist(true);
     });
 
     socket.on('remote_cursor', async ({ socketId, cursorData }: { socketId: string; cursorData: any }) => {
