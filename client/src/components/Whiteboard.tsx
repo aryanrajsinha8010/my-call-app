@@ -88,6 +88,25 @@ export default function Whiteboard({
   
   // Real-time Collaborative Presentation, Cursors and Laser Pointer Refs & States
   const [remoteCursors, setRemoteCursors] = useState<Record<string, RemoteCursor>>({});
+  
+  // Overlays and hover states for Linked Screen
+  const [localOverlayHover, setLocalOverlayHover] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const handleLocalHover = (e: CustomEvent<any>) => {
+      const { x, y, active } = e.detail;
+      if (active) {
+        setLocalOverlayHover({ x, y });
+      } else {
+        setLocalOverlayHover(null);
+      }
+    };
+    window.addEventListener('local-hover-pointer' as any, handleLocalHover);
+    return () => {
+      window.removeEventListener('local-hover-pointer' as any, handleLocalHover);
+    };
+  }, []);
+
   const localMouseCoords = useRef<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false });
   const localLaserPath = useRef<{ x: number; y: number; timestamp: number }[]>([]);
   const remoteLaserPaths = useRef<Record<string, { x: number; y: number; timestamp: number }[]>>({});
@@ -572,6 +591,11 @@ export default function Whiteboard({
 
     currentPos.current = { x, y };
 
+    // Dispatch whiteboard hover pointer coordinate event
+    window.dispatchEvent(new CustomEvent('whiteboard-hover-pointer', {
+      detail: { x, y, active: true }
+    }));
+
     if (tool === 'laser') {
       if (isDrawing) {
         localLaserPath.current.push({ x, y, timestamp: Date.now() });
@@ -648,6 +672,11 @@ export default function Whiteboard({
     // Hide our local cursor and broadcast deactivation to room peers
     localMouseCoords.current.visible = false;
     emitCursor({ x: 0, y: 0, active: false, isDrawing: false });
+
+    // Dispatch whiteboard hover pointer inactive event
+    window.dispatchEvent(new CustomEvent('whiteboard-hover-pointer', {
+      detail: { active: false }
+    }));
 
     if (!isDrawing) return;
     setIsDrawing(false);
@@ -1772,8 +1801,8 @@ export default function Whiteboard({
         {/* Dynamic canvas node */}
         <canvas 
           ref={canvasRef}
-          width="500" // Increased internal coordinate resolution for crisper drawings
-          height="320"
+          width="1000" // Aligned coordinate resolution to exactly match perspective mapping
+          height="640"
           onMouseDown={handleStartDraw}
           onMouseMove={handleDraw}
           onMouseUp={handleStopDraw}
@@ -1784,19 +1813,36 @@ export default function Whiteboard({
         {/* Dynamic High-Performance Overlay Canvas for Laser Pointer Trails */}
         <canvas 
           ref={overlayCanvasRef}
-          width="500"
-          height="320"
+          width="1000"
+          height="640"
           className="absolute top-0 left-0 w-full h-full pointer-events-none z-20"
         />
 
         {/* Real-time Collaborative Cursors Layer */}
         <div className="absolute inset-0 pointer-events-none z-30 overflow-hidden">
+          {localOverlayHover && (
+            <div 
+              className="absolute pointer-events-none flex flex-col items-center justify-center transition-all duration-75 ease-out z-40"
+              style={{
+                left: `${(localOverlayHover.x / 1000) * 100}%`,
+                top: `${(localOverlayHover.y / 640) * 100}%`,
+                transform: 'translate(-50%, -50%)',
+              }}
+            >
+              <div className="w-5 h-5 rounded-full border-2 border-[var(--nx-primary)] bg-[var(--nx-primary)]/20 animate-pulse flex items-center justify-center shadow-[0_0_10px_var(--nx-primary)]">
+                <div className="w-1.5 h-1.5 rounded-full bg-[var(--nx-primary)] shadow-[0_0_4px_var(--nx-primary)]" />
+              </div>
+              <div className="mt-1 px-1.5 py-0.5 rounded bg-slate-950/80 border border-[var(--nx-primary)]/40 text-[7px] text-white font-mono uppercase tracking-wider font-bold">
+                Drawing Spot
+              </div>
+            </div>
+          )}
           {Object.values(remoteCursors).map((cursor) => {
             if (!cursor.active) return null;
             
             // Calculate absolute position based on parent bounds using coordinate percentages
-            const leftPercent = `${(cursor.x / 500) * 100}%`;
-            const topPercent = `${(cursor.y / 320) * 100}%`;
+            const leftPercent = `${(cursor.x / 1000) * 100}%`;
+            const topPercent = `${(cursor.y / 640) * 100}%`;
 
             return (
               <div

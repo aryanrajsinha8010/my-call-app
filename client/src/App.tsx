@@ -367,6 +367,13 @@ export default function App() {
   const [isOverlayDrawing, setIsOverlayDrawing] = useState(false);
   const overlayLastPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const draggingHandleIdxRef = useRef<number | null>(null);
+  
+  // Track container pixel dimensions for accurate perspective calculations
+  const [containerSize, setContainerSize] = useState({ width: 853, height: 480 });
+  
+  // Bidirectional pointer tracking states
+  const [overlayHoverPos, setOverlayHoverPos] = useState<{ x: number; y: number } | null>(null);
+  const [whiteboardProjectedPointer, setWhiteboardProjectedPointer] = useState<{ x: number; y: number } | null>(null);
 
 
 
@@ -2613,7 +2620,56 @@ export default function App() {
     }
   }, [isLinkedToShareScreen]);
 
-  // 3. Global handle dragging event tracking
+  // 3. ResizeObserver to track container dimension changes dynamically
+  useEffect(() => {
+    const el = document.getElementById('linked-video-box');
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        setContainerSize({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height
+        });
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [isLinkedToShareScreen, linkedStreamId]);
+
+  // 4. Right-to-Left whiteboard pointer tracking listener
+  useEffect(() => {
+    const handleWhiteboardHover = (e: CustomEvent<any>) => {
+      const { x, y, active } = e.detail;
+      if (!active) {
+        setWhiteboardProjectedPointer(null);
+        return;
+      }
+      
+      const W = containerSize.width;
+      const H = containerSize.height;
+      const src = [
+        { x: 0, y: 0 },
+        { x: 1000, y: 0 },
+        { x: 1000, y: 640 },
+        { x: 0, y: 640 }
+      ];
+      const dst = calibrationPoints.map(pt => ({
+        x: (pt.x * W) / 100,
+        y: (pt.y * H) / 100
+      }));
+      
+      const matrix = getHomographyMatrix(src, dst);
+      const projected = transformPoint(x, y, matrix);
+      setWhiteboardProjectedPointer(projected);
+    };
+    
+    window.addEventListener('whiteboard-hover-pointer' as any, handleWhiteboardHover);
+    return () => {
+      window.removeEventListener('whiteboard-hover-pointer' as any, handleWhiteboardHover);
+    };
+  }, [calibrationPoints, containerSize]);
+
+  // 5. Global handle dragging event tracking
   useEffect(() => {
     const handleWindowMouseMove = (e: MouseEvent) => {
       if (draggingHandleIdxRef.current !== null) {
@@ -2646,7 +2702,7 @@ export default function App() {
     };
   }, []);
 
-  // 4. Real-time canvas mirroring requestAnimationFrame loop
+  // 6. Real-time canvas mirroring requestAnimationFrame loop
   useEffect(() => {
     let animFrameId: number;
     
@@ -2657,7 +2713,6 @@ export default function App() {
         if (mainCanvas && overlayCanvas) {
           const overlayCtx = overlayCanvas.getContext('2d');
           if (overlayCtx) {
-            // Synchronize dimensions
             if (overlayCanvas.width !== mainCanvas.width || overlayCanvas.height !== mainCanvas.height) {
               overlayCanvas.width = mainCanvas.width;
               overlayCanvas.height = mainCanvas.height;
@@ -2674,7 +2729,7 @@ export default function App() {
     return () => cancelAnimationFrame(animFrameId);
   }, [isLinkedToShareScreen]);
 
-  // 5. Handles for dragging handles and overlay drawing
+  // 7. Handles for dragging handles and overlay drawing
   const handleStartDragHandle = (e: React.MouseEvent, idx: number) => {
     e.preventDefault();
     draggingHandleIdxRef.current = idx;
@@ -2684,40 +2739,59 @@ export default function App() {
     e.preventDefault();
     setIsOverlayDrawing(true);
     const rect = e.currentTarget.getBoundingClientRect();
-    const u = ((e.clientX - rect.left) / rect.width) * 100;
-    const v = ((e.clientY - rect.top) / rect.height) * 100;
+    const u = e.clientX - rect.left;
+    const v = e.clientY - rect.top;
     
-    const H_inv = getHomographyMatrix(
-      calibrationPoints,
-      [
-        { x: 0, y: 0 },
-        { x: 1000, y: 0 },
-        { x: 1000, y: 640 },
-        { x: 0, y: 640 }
-      ]
-    );
+    const W = rect.width;
+    const H = rect.height;
+    
+    const src = calibrationPoints.map(pt => ({
+      x: (pt.x * W) / 100,
+      y: (pt.y * H) / 100
+    }));
+    const dst = [
+      { x: 0, y: 0 },
+      { x: 1000, y: 0 },
+      { x: 1000, y: 640 },
+      { x: 0, y: 640 }
+    ];
+    
+    const H_inv = getHomographyMatrix(src, dst);
     const mapped = transformPoint(u, v, H_inv);
     overlayLastPosRef.current = mapped;
   };
 
   const handleOverlayMouseMove = (e: React.MouseEvent) => {
-    if (!isOverlayDrawing) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const u = ((e.clientX - rect.left) / rect.width) * 100;
-    const v = ((e.clientY - rect.top) / rect.height) * 100;
+    const u = e.clientX - rect.left;
+    const v = e.clientY - rect.top;
     
-    const H_inv = getHomographyMatrix(
-      calibrationPoints,
-      [
-        { x: 0, y: 0 },
-        { x: 1000, y: 0 },
-        { x: 1000, y: 640 },
-        { x: 0, y: 640 }
-      ]
-    );
+    const W = rect.width;
+    const H = rect.height;
+    
+    const src = calibrationPoints.map(pt => ({
+      x: (pt.x * W) / 100,
+      y: (pt.y * H) / 100
+    }));
+    const dst = [
+      { x: 0, y: 0 },
+      { x: 1000, y: 0 },
+      { x: 1000, y: 640 },
+      { x: 0, y: 640 }
+    ];
+    
+    const H_inv = getHomographyMatrix(src, dst);
     const mapped = transformPoint(u, v, H_inv);
     
-    // Dispatch local stroke draw event caught by Whiteboard.tsx custom listener!
+    setOverlayHoverPos({ x: u, y: v });
+    
+    // Dispatch local hover pointer coordinate event to Whiteboard.tsx
+    window.dispatchEvent(new CustomEvent('local-hover-pointer', { 
+      detail: { x: mapped.x, y: mapped.y, active: true } 
+    }));
+    
+    if (!isOverlayDrawing) return;
+    
     const stroke = {
       x: mapped.x,
       y: mapped.y,
@@ -2730,6 +2804,12 @@ export default function App() {
     
     window.dispatchEvent(new CustomEvent('local-draw-stroke', { detail: { stroke } }));
     overlayLastPosRef.current = mapped;
+  };
+
+  const handleOverlayMouseLeave = () => {
+    setIsOverlayDrawing(false);
+    setOverlayHoverPos(null);
+    window.dispatchEvent(new CustomEvent('local-hover-pointer', { detail: { active: false } }));
   };
 
   const handleOverlayMouseUp = () => {
@@ -6663,6 +6743,7 @@ export default function App() {
                       className="relative w-full h-full flex items-center justify-center p-4"
                     >
                       <div 
+                        id="linked-video-box"
                         className="relative aspect-video max-w-full max-h-full rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-slate-950 flex items-center justify-center"
                         style={{ width: '100%', height: '100%', maxWidth: '853px', maxHeight: '480px' }} // Standard 16:9 box
                       >
@@ -6684,20 +6765,27 @@ export default function App() {
                           height="640"
                           className="absolute top-0 left-0 pointer-events-none z-10"
                           style={{
-                            width: '100%',
-                            height: '100%',
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '1000px',
+                            height: '640px',
                             transformOrigin: '0 0',
                             transform: (() => {
-                              const H = getHomographyMatrix(
-                                [
-                                  { x: 0, y: 0 },
-                                  { x: 100, y: 0 },
-                                  { x: 100, y: 100 },
-                                  { x: 0, y: 100 }
-                                ],
-                                calibrationPoints
-                              );
-                              return getCssMatrix3d(H);
+                              const W = containerSize.width;
+                              const H = containerSize.height;
+                              const src = [
+                                { x: 0, y: 0 },
+                                { x: 1000, y: 0 },
+                                { x: 1000, y: 640 },
+                                { x: 0, y: 640 }
+                              ];
+                              const dst = calibrationPoints.map(pt => ({
+                                x: (pt.x * W) / 100,
+                                y: (pt.y * H) / 100
+                              }));
+                              const matrix = getHomographyMatrix(src, dst);
+                              return getCssMatrix3d(matrix);
                             })()
                           }}
                         />
@@ -6709,8 +6797,41 @@ export default function App() {
                           onMouseDown={handleOverlayMouseDown}
                           onMouseMove={handleOverlayMouseMove}
                           onMouseUp={handleOverlayMouseUp}
-                          onMouseLeave={handleOverlayMouseUp}
+                          onMouseLeave={handleOverlayMouseLeave}
                         />
+
+                        {/* ── BIDIRECTIONAL HOVER POINTER OVERLAYS ── */}
+                        {overlayHoverPos && (
+                          <div 
+                            className="absolute pointer-events-none w-6 h-6 -ml-3 -mt-3 rounded-full border-2 border-amber-400 bg-amber-400/10 flex items-center justify-center z-30 transition-all duration-75 ease-out shadow-[0_0_10px_rgba(220,177,107,0.6)]"
+                            style={{
+                              left: `${overlayHoverPos.x}px`,
+                              top: `${overlayHoverPos.y}px`
+                            }}
+                          >
+                            <div className="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_4px_rgba(220,177,107,0.9)]" />
+                          </div>
+                        )}
+
+                        {whiteboardProjectedPointer && (
+                          <div 
+                            className="absolute pointer-events-none w-8 h-8 -ml-4 -mt-4 flex items-center justify-center z-30 transition-all duration-75 ease-out"
+                            style={{
+                              left: `${whiteboardProjectedPointer.x}px`,
+                              top: `${whiteboardProjectedPointer.y}px`
+                            }}
+                          >
+                            {/* Neon glowing target crosshair */}
+                            <div className="w-4.5 h-4.5 rounded-full border-2 border-indigo-400 bg-indigo-400/20 shadow-[0_0_12px_rgba(129,140,248,0.7)] flex items-center justify-center relative">
+                              <div className="absolute w-6 h-0.5 bg-indigo-400/50" />
+                              <div className="absolute h-6 w-0.5 bg-indigo-400/50" />
+                              <div className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                            </div>
+                            <div className="absolute -bottom-5 px-1.5 py-0.5 rounded bg-slate-950/80 border border-indigo-400/30 text-[7px] text-white font-mono uppercase tracking-wider font-bold">
+                              Whiteboard Spot
+                            </div>
+                          </div>
+                        )}
 
                         {/* ── INTERACTIVE CALIBRATION HANDLES OVERLAY ── */}
                         {isCalibrating && (

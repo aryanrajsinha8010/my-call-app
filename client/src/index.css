@@ -1071,32 +1071,32 @@ select.nx-input option { background: #0f172a; color: #e2e8f0; }
    STITCH REDESIGN — Frosted Communication Tablet
    ============================================================ */
 :root {
-  --nx-canvas: #fff5ec;
-  --nx-canvas-2: #ffebe2;
-  --nx-ink: #2c2523;
-  --nx-muted: #70635f;
-  --nx-panel: rgba(255, 255, 255, 0.88);
-  --nx-panel-solid: #fffbf9;
-  --nx-line: rgba(209, 110, 71, 0.09);
-  --nx-line-strong: rgba(209, 110, 71, 0.16);
-  --nx-primary: #d16e47;        /* Rich terracotta accent for readable text */
-  --nx-primary-dark: #ac4f2a;   /* Deep terracotta accent */
-  --nx-teal: #e39a7a;           /* Fresh peach/coral */
-  --nx-teal-soft: #ffebe2;      /* Soft rose-peach */
-  --nx-coral: #ffb6ac;          /* Vibrant soft peach-rose */
-  --nx-navy: #48342d;           /* Deep dark clay/terracotta */
-  --nx-navy-2: #2c2523;         /* Deep dark brown-charcoal */
-  --nx-warm: #dcb16b;           /* Muted golden sand */
-  --nx-shadow: 0 24px 60px rgba(80, 55, 45, 0.10);
-  --nx-soft-shadow: 0 14px 34px rgba(80, 55, 45, 0.06);
+  --nx-canvas: #050814;          /* Abyss base */
+  --nx-canvas-2: #080d20;        /* Space obsidian dark panel */
+  --nx-ink: #f8fafc;             /* High contrast crisp off-white text */
+  --nx-muted: #94a3b8;           /* Muted secondary slate/gray text */
+  --nx-panel: rgba(8, 13, 32, 0.82); /* Frosted communication tablet base */
+  --nx-panel-solid: #0c122b;     /* High density solid panel background */
+  --nx-line: rgba(220, 177, 107, 0.15); /* Gold aura borderline */
+  --nx-line-strong: rgba(220, 177, 107, 0.3); /* Focused gold borderline */
+  --nx-primary: #dcb16b;          /* Muted Golden Sand Accent */
+  --nx-primary-dark: #b58d4a;     /* Deep golden sand accent */
+  --nx-teal: #06b6d4;             /* Electric Cyan highlights */
+  --nx-teal-soft: rgba(6, 182, 212, 0.15); /* Translucent electric cyan */
+  --nx-coral: #10b981;            /* Emerald online/success accents */
+  --nx-navy: #1b264f;             /* Sovereign deep indigo */
+  --nx-navy-2: #040712;           /* Abyss pure black */
+  --nx-warm: #dcb16b;             /* Pure gold sand */
+  --nx-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  --nx-soft-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
 body {
   background:
-    radial-gradient(circle at 18% 10%, rgba(227, 154, 122, 0.18), transparent 28%),
-    radial-gradient(circle at 82% 18%, rgba(255, 182, 172, 0.20), transparent 26%),
-    radial-gradient(circle at 72% 88%, rgba(220, 177, 107, 0.16), transparent 28%),
-    linear-gradient(135deg, #fff9f5 0%, #ffebe2 46%, #fff2e8 100%);
+    radial-gradient(circle at 18% 10%, rgba(6, 182, 212, 0.08), transparent 28%),
+    radial-gradient(circle at 82% 18%, rgba(220, 177, 107, 0.06), transparent 26%),
+    radial-gradient(circle at 72% 88%, rgba(16, 185, 129, 0.06), transparent 28%),
+    linear-gradient(135deg, #040712 0%, #080d20 46%, #050814 100%);
   color: var(--nx-ink);
   overflow: hidden;
 }
@@ -1114,23 +1114,23 @@ body,
   height: 12px !important;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(209, 110, 71, 0.04) !important;
+  background: rgba(220, 177, 107, 0.02) !important;
   border-radius: 99px !important;
 }
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(227, 154, 122, 0.75) 0%, rgba(220, 177, 107, 0.75) 100%) !important;
+  background: linear-gradient(180deg, rgba(220, 177, 107, 0.4) 0%, rgba(181, 141, 74, 0.4) 100%) !important;
   border: 3px solid transparent !important;
   background-clip: padding-box !important;
   border-radius: 99px !important;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(227, 154, 122, 0.95) 0%, rgba(220, 177, 107, 0.95) 100%) !important;
+  background: linear-gradient(180deg, rgba(220, 177, 107, 0.8) 0%, rgba(181, 141, 74, 0.8) 100%) !important;
   border: 2px solid transparent !important;
   background-clip: padding-box !important;
 }
 * {
   scrollbar-width: thin !important;
-  scrollbar-color: rgba(227, 154, 122, 0.75) rgba(209, 110, 71, 0.05) !important;
+  scrollbar-color: rgba(220, 177, 107, 0.4) rgba(220, 177, 107, 0.02) !important;
 }
 
 .app-main,
@@ -1145,16 +1145,16 @@ body,
 
 .nx-bg {
   background:
-    radial-gradient(circle at 12% 18%, rgba(227, 154, 122, 0.08), transparent 22%),
-    radial-gradient(circle at 88% 82%, rgba(220, 177, 107, 0.08), transparent 24%);
+    radial-gradient(circle at 12% 18%, rgba(6, 182, 212, 0.08), transparent 22%),
+    radial-gradient(circle at 88% 82%, rgba(220, 177, 107, 0.06), transparent 24%);
 }
 
 .nx-bg-grid {
-  opacity: 0.4;
+  opacity: 0.25;
   background-image:
-    linear-gradient(135deg, rgba(209, 110, 71, 0.08) 1px, transparent 1px),
-    linear-gradient(45deg, rgba(220, 177, 107, 0.06) 1px, transparent 1px),
-    repeating-radial-gradient(ellipse at 50% 50%, transparent 0 34px, rgba(209, 110, 71, 0.04) 35px 36px);
+    linear-gradient(135deg, rgba(6, 182, 212, 0.06) 1px, transparent 1px),
+    linear-gradient(45deg, rgba(220, 177, 107, 0.04) 1px, transparent 1px),
+    repeating-radial-gradient(ellipse at 50% 50%, transparent 0 34px, rgba(220, 177, 107, 0.02) 35px 36px);
   background-size: 58px 58px, 58px 58px, 260px 180px;
   mask-image: none;
   animation: contour-drift 34s linear infinite;
@@ -1174,23 +1174,24 @@ body,
 .glass-bright {
   background: var(--nx-panel);
   color: var(--nx-ink);
-  border: 1px solid rgba(255, 255, 255, 0.82);
-  box-shadow: var(--nx-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(14px) saturate(1.08);
-  -webkit-backdrop-filter: blur(14px) saturate(1.08);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: var(--nx-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
 }
 
 .glass-card:hover {
-  border-color: rgba(209, 110, 71, 0.22);
-  box-shadow: 0 28px 72px rgba(35, 45, 80, 0.16), inset 0 1px 0 rgba(255,255,255,0.84);
+  border-color: rgba(220, 177, 107, 0.25);
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .app-header {
   min-height: 58px;
   margin: 12px 24px 0;
   border-radius: 24px;
-  border-color: rgba(255,255,255,0.68);
-  background: rgba(255,255,255,0.92);
+  border-color: rgba(255, 255, 255, 0.07);
+  background: rgba(8, 13, 32, 0.85);
+  backdrop-filter: blur(14px);
 }
 
 .app-header .text-white,
@@ -1207,26 +1208,26 @@ body,
 }
 
 .nx-logo {
-  background: #48342d;
+  background: #1b264f;
   color: white;
-  box-shadow: 0 12px 26px rgba(72, 52, 45, 0.22), inset 0 1px 0 rgba(255,255,255,0.22);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.22);
 }
 
 .nx-badge-green {
-  background: rgba(13, 148, 136, 0.12);
-  color: #006a61;
-  border-color: rgba(13, 148, 136, 0.2);
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.2);
 }
 
 .nx-badge-indigo {
-  background: rgba(54, 87, 255, 0.11);
-  color: var(--nx-primary-dark);
-  border-color: rgba(54, 87, 255, 0.18);
+  background: rgba(6, 182, 212, 0.11);
+  color: #22d3ee;
+  border-color: rgba(6, 182, 212, 0.18);
 }
 
 .nx-badge-rose {
   background: rgba(244, 63, 94, 0.12);
-  color: #be123c;
+  color: #fda4af;
   border-color: rgba(244, 63, 94, 0.24);
 }
 
@@ -1253,7 +1254,8 @@ body,
   border-radius: 28px !important;
   max-height: 100%;
   overflow: hidden;
-  background: rgba(255,255,255,0.91);
+  background: rgba(8, 13, 32, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .lobby-preview-card {
@@ -1267,7 +1269,7 @@ body,
   inset: auto 24px 24px 24px;
   height: 52px;
   border-radius: 18px;
-  background: linear-gradient(90deg, rgba(54,87,255,0.24), rgba(13,148,136,0.18), rgba(244,63,94,0.16));
+  background: linear-gradient(90deg, rgba(6, 182, 212, 0.2), rgba(220, 177, 107, 0.15), rgba(16, 185, 129, 0.15));
   pointer-events: none;
   opacity: 0.75;
 }
@@ -1275,21 +1277,21 @@ body,
 .identity-card,
 .direct-call-card,
 .profile-mini-card {
-  background: rgba(255, 255, 255, 0.78) !important;
+  background: rgba(8, 13, 32, 0.82) !important;
   border: 1px solid var(--nx-line) !important;
   box-shadow: var(--nx-soft-shadow);
 }
 
 .nx-input {
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(5, 8, 20, 0.75);
   border-color: var(--nx-line);
   color: var(--nx-ink);
   border-radius: 12px;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.72);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
 }
 
 .nx-input::placeholder {
-  color: #7a8498;
+  color: #64748b;
 }
 
 .nx-input:hover {
@@ -1297,20 +1299,20 @@ body,
 }
 
 .nx-input:focus {
-  background: rgba(255,255,255,0.92);
-  border-color: rgba(13, 148, 136, 0.65);
-  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.12);
+  background: rgba(5, 8, 20, 0.95);
+  border-color: var(--nx-primary) !important;
+  box-shadow: 0 0 0 3px rgba(220, 177, 107, 0.12);
 }
 
 .nx-input-label,
 .nx-section-header,
 .stat-card .stat-label {
-  color: #6a7386;
+  color: #94a3b8;
   letter-spacing: 0.08em;
 }
 
 .nx-section-header::after {
-  background: rgba(19, 27, 46, 0.08);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .nx-btn {
@@ -1318,33 +1320,36 @@ body,
 }
 
 .nx-btn-primary {
-  background: linear-gradient(180deg, #e39a7a 0%, var(--nx-primary) 100%);
-  box-shadow: 0 14px 28px rgba(209, 110, 71, 0.22), inset 0 1px 0 rgba(255,255,255,0.26);
+  background: linear-gradient(180deg, #e5c38c 0%, var(--nx-primary) 100%) !important;
+  color: #040712 !important;
+  box-shadow: 0 10px 24px rgba(220, 177, 107, 0.18), inset 0 1px 0 rgba(255,255,255,0.2) !important;
+  font-weight: 800 !important;
 }
 
 .nx-btn-primary:hover {
-  background: linear-gradient(180deg, #f0b093 0%, #c45b32 100%);
-  box-shadow: 0 18px 36px rgba(209, 110, 71, 0.28), inset 0 1px 0 rgba(255,255,255,0.3);
+  background: linear-gradient(180deg, #f0d8b5 0%, #c19b5b 100%) !important;
+  box-shadow: 0 14px 34px rgba(220, 177, 107, 0.26), inset 0 1px 0 rgba(255,255,255,0.3) !important;
+  transform: translateY(-1px) !important;
 }
 
 .nx-btn-danger {
-  background: linear-gradient(180deg, #ff697f 0%, var(--nx-coral) 100%);
+  background: linear-gradient(180deg, #ff697f 0%, var(--nx-danger) 100%);
   box-shadow: 0 14px 28px rgba(244, 63, 94, 0.26), inset 0 1px 0 rgba(255,255,255,0.24);
 }
 
 .nx-btn-ghost,
 .nx-btn-icon {
-  background: rgba(255, 255, 255, 0.58);
+  background: rgba(8, 13, 32, 0.6);
   border-color: var(--nx-line);
-  color: #48546a;
+  color: #cbd5e1;
 }
 
 .nx-btn-ghost:hover,
 .nx-btn-icon:hover {
-  background: rgba(255, 255, 255, 0.84);
-  border-color: rgba(209, 110, 71, 0.22);
-  color: var(--nx-primary-dark);
-  box-shadow: 0 12px 24px rgba(35, 45, 80, 0.10);
+  background: rgba(8, 13, 32, 0.95);
+  border-color: rgba(220, 177, 107, 0.25);
+  color: var(--nx-primary);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
 }
 
 .nx-btn-icon.active {
