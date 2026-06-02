@@ -20,6 +20,7 @@ import { LandingPage } from './components/LandingPage.tsx';
 import { encryptText, decryptText, deriveKeyFromPassphrase, encryptChunk, decryptChunk } from './lib/e2ee.ts';
 import DiagnosticsPanel from './components/DiagnosticsPanel.tsx';
 import AiAssistantPanel from './components/AiAssistantPanel.tsx';
+import { getHomographyMatrix, transformPoint, getCssMatrix3d } from './lib/homography.ts';
 
 
 const API = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8001';
@@ -352,6 +353,23 @@ export default function App() {
     return initial.view;
   });
   const [activeTab, setActiveTab] = useState<Tab>('audio');
+  
+  // ── LINK TO SHARE SCREEN FEATURE STATES & REFS ──
+  const [isLinkedToShareScreen, setIsLinkedToShareScreen] = useState(false);
+  const [linkedStreamId, setLinkedStreamId] = useState<string | null>(null);
+  const [isCalibrating, setIsCalibrating] = useState(false);
+  const [calibrationPoints, setCalibrationPoints] = useState<Array<{ x: number; y: number }>>([
+    { x: 10, y: 10 },   // Top-Left (TL)
+    { x: 90, y: 10 },   // Top-Right (TR)
+    { x: 90, y: 90 },   // Bottom-Right (BR)
+    { x: 10, y: 90 }    // Bottom-Left (BL)
+  ]);
+  const [isOverlayDrawing, setIsOverlayDrawing] = useState(false);
+  const overlayLastPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const draggingHandleIdxRef = useRef<number | null>(null);
+
+
+
   const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [fitMode, setFitMode] = useState<'cover' | 'contain'>('cover');
@@ -2569,6 +2587,154 @@ export default function App() {
     else stopPipeline();
     return () => stopPipeline();
   }, [inRoom, localStream, startPipeline, stopPipeline]);
+
+  // ── LINK TO SHARE SCREEN COORDINATED EFFECTS & UTILITIES ──
+  
+  // 1. Auto-select active stream source when enabling link
+  useEffect(() => {
+    if (isLinkedToShareScreen && !linkedStreamId) {
+      if (screenStream) {
+        setLinkedStreamId('screen');
+      } else {
+        setLinkedStreamId('self');
+      }
+    }
+  }, [isLinkedToShareScreen, screenStream, linkedStreamId]);
+
+  // 2. Expand sidebar to 72% width when whiteboard is linked, restore on unlink
+  const lastSidebarWidthRef = useRef(320);
+  useEffect(() => {
+    if (isLinkedToShareScreen) {
+      lastSidebarWidthRef.current = sidebarWidth;
+      setSidebarWidth(Math.floor(window.innerWidth * 0.72));
+      setActiveTab('whiteboard');
+    } else {
+      setSidebarWidth(lastSidebarWidthRef.current);
+    }
+  }, [isLinkedToShareScreen]);
+
+  // 3. Global handle dragging event tracking
+  useEffect(() => {
+    const handleWindowMouseMove = (e: MouseEvent) => {
+      if (draggingHandleIdxRef.current !== null) {
+        const container = document.getElementById('linked-focus-container');
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          let x = ((e.clientX - rect.left) / rect.width) * 100;
+          let y = ((e.clientY - rect.top) / rect.height) * 100;
+          x = Math.max(0, Math.min(100, x));
+          y = Math.max(0, Math.min(100, y));
+          
+          setCalibrationPoints(prev => {
+            const next = [...prev];
+            next[draggingHandleIdxRef.current!] = { x, y };
+            return next;
+          });
+        }
+      }
+    };
+    
+    const handleWindowMouseUp = () => {
+      draggingHandleIdxRef.current = null;
+    };
+    
+    window.addEventListener('mousemove', handleWindowMouseMove);
+    window.addEventListener('mouseup', handleWindowMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+      window.removeEventListener('mouseup', handleWindowMouseUp);
+    };
+  }, []);
+
+  // 4. Real-time canvas mirroring requestAnimationFrame loop
+  useEffect(() => {
+    let animFrameId: number;
+    
+    const tick = () => {
+      if (isLinkedToShareScreen) {
+        const mainCanvas = document.querySelector('.whiteboard-container canvas') as HTMLCanvasElement;
+        const overlayCanvas = document.getElementById('linked-overlay-canvas') as HTMLCanvasElement;
+        if (mainCanvas && overlayCanvas) {
+          const overlayCtx = overlayCanvas.getContext('2d');
+          if (overlayCtx) {
+            // Synchronize dimensions
+            if (overlayCanvas.width !== mainCanvas.width || overlayCanvas.height !== mainCanvas.height) {
+              overlayCanvas.width = mainCanvas.width;
+              overlayCanvas.height = mainCanvas.height;
+            }
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            overlayCtx.drawImage(mainCanvas, 0, 0);
+          }
+        }
+      }
+      animFrameId = requestAnimationFrame(tick);
+    };
+    
+    animFrameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animFrameId);
+  }, [isLinkedToShareScreen]);
+
+  // 5. Handles for dragging handles and overlay drawing
+  const handleStartDragHandle = (e: React.MouseEvent, idx: number) => {
+    e.preventDefault();
+    draggingHandleIdxRef.current = idx;
+  };
+
+  const handleOverlayMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsOverlayDrawing(true);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const u = ((e.clientX - rect.left) / rect.width) * 100;
+    const v = ((e.clientY - rect.top) / rect.height) * 100;
+    
+    const H_inv = getHomographyMatrix(
+      calibrationPoints,
+      [
+        { x: 0, y: 0 },
+        { x: 1000, y: 0 },
+        { x: 1000, y: 640 },
+        { x: 0, y: 640 }
+      ]
+    );
+    const mapped = transformPoint(u, v, H_inv);
+    overlayLastPosRef.current = mapped;
+  };
+
+  const handleOverlayMouseMove = (e: React.MouseEvent) => {
+    if (!isOverlayDrawing) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const u = ((e.clientX - rect.left) / rect.width) * 100;
+    const v = ((e.clientY - rect.top) / rect.height) * 100;
+    
+    const H_inv = getHomographyMatrix(
+      calibrationPoints,
+      [
+        { x: 0, y: 0 },
+        { x: 1000, y: 0 },
+        { x: 1000, y: 640 },
+        { x: 0, y: 640 }
+      ]
+    );
+    const mapped = transformPoint(u, v, H_inv);
+    
+    // Dispatch local stroke draw event caught by Whiteboard.tsx custom listener!
+    const stroke = {
+      x: mapped.x,
+      y: mapped.y,
+      lastX: overlayLastPosRef.current.x,
+      lastY: overlayLastPosRef.current.y,
+      color: '#dcb16b',
+      size: 4,
+      isEraser: false
+    };
+    
+    window.dispatchEvent(new CustomEvent('local-draw-stroke', { detail: { stroke } }));
+    overlayLastPosRef.current = mapped;
+  };
+
+  const handleOverlayMouseUp = () => {
+    setIsOverlayDrawing(false);
+  };
 
   // ── Desktop Agent Integration ──
   useEffect(() => {
@@ -6428,8 +6594,157 @@ export default function App() {
                   equal       → always exactly 2 equal columns
                   horizontal  → row: self 40% | remotes 60% in column
               */}
-              <div
-                className={`flex-1 gap-4 overflow-y-auto ${
+              {isLinkedToShareScreen ? (
+                /* ── LINKED SHARE SCREEN FOCUS VIEW ── */
+                <div className="flex-1 flex flex-col gap-4 min-h-0 relative">
+                  
+                  {/* ── SCROLLABLE VIDEO RIBBON (HORIZONTAL STRIP) ── */}
+                  <div className="flex gap-3 overflow-x-auto pb-2 px-1 min-h-[110px] items-center bg-slate-950/40 p-2.5 rounded-2xl border border-white/5 backdrop-blur-md">
+                    {/* Render Self Camera in Ribbon if not selected */}
+                    {linkedStreamId !== 'self' && !locallyHiddenPeers.includes('self') && (
+                      <div 
+                        onClick={() => setLinkedStreamId('self')}
+                        className="flex-shrink-0 w-32 aspect-video rounded-xl overflow-hidden border border-white/10 hover:border-[var(--nx-primary)]/50 transition cursor-pointer relative group bg-slate-900"
+                      >
+                        <video ref={localVideoCallbackRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
+                        <div className="absolute bottom-1 left-1.5 right-1.5 flex items-center justify-between text-[8px] bg-slate-950/80 px-1 py-0.5 rounded text-white font-semibold">
+                          <span className="truncate">Self (You)</span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Render Screen Share in Ribbon if not selected */}
+                    {screenStream && linkedStreamId !== 'screen' && (
+                      <div 
+                        onClick={() => setLinkedStreamId('screen')}
+                        className="flex-shrink-0 w-32 aspect-video rounded-xl overflow-hidden border border-white/10 hover:border-[var(--nx-primary)]/50 transition cursor-pointer relative group bg-slate-900"
+                      >
+                        <video ref={screenVideoCallbackRef} autoPlay playsInline muted className="w-full h-full object-contain" />
+                        <div className="absolute bottom-1 left-1.5 right-1.5 flex items-center justify-between text-[8px] bg-slate-950/80 px-1 py-0.5 rounded text-white font-semibold">
+                          <span className="truncate">Screen Share</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Render Remote Peers in Ribbon */}
+                    {orderedParticipants.map(peer => {
+                      if (locallyHiddenPeers.includes(peer.id)) return null;
+                      return (
+                        <div 
+                          key={peer.id}
+                          className="flex-shrink-0 w-32 aspect-video rounded-xl overflow-hidden border border-white/10 transition relative bg-slate-900 flex flex-col items-center justify-center p-2"
+                        >
+                          {isValidProfilePic(getPeerProfilePic(peer)) ? (
+                            <img src={getPeerProfilePic(peer)} alt={peer.name} className="w-8 h-8 rounded-full object-cover" />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-xs text-indigo-400 font-bold">{peer.avatar}</div>
+                          )}
+                          <span className="text-[8px] text-slate-400 mt-1 font-semibold truncate max-w-full">{peer.name}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* ── DOMINANT FOCUS STREAM VIEW (WITH OVERLAYS) ── */}
+                  <div className="flex-1 flex items-center justify-center min-h-0 bg-[#060a18] rounded-3xl border border-white/5 relative overflow-hidden group shadow-2xl">
+                    
+                    {/* Glow corner decorations */}
+                    <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
+                    <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
+
+                    {/* Live Calibrating Overlay / Frame */}
+                    {isCalibrating && (
+                      <div className="absolute inset-0 border border-[var(--nx-primary)]/30 rounded-3xl pointer-events-none z-30 animate-pulse bg-gradient-to-t from-[var(--nx-primary)]/2 to-transparent" />
+                    )}
+
+                    {/* Selected Video Element wrapper */}
+                    <div 
+                      id="linked-focus-container"
+                      className="relative w-full h-full flex items-center justify-center p-4"
+                    >
+                      <div 
+                        className="relative aspect-video max-w-full max-h-full rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-slate-950 flex items-center justify-center"
+                        style={{ width: '100%', height: '100%', maxWidth: '853px', maxHeight: '480px' }} // Standard 16:9 box
+                      >
+                        {linkedStreamId === 'self' ? (
+                          <video ref={localVideoCallbackRef} autoPlay playsInline muted className="w-full h-full object-contain" style={{ transform: 'scaleX(-1)' }} />
+                        ) : linkedStreamId === 'screen' ? (
+                          <video ref={screenVideoCallbackRef} autoPlay playsInline muted className="w-full h-full object-contain" />
+                        ) : (
+                          <div className="flex flex-col items-center gap-2 opacity-50">
+                            <Users className="w-12 h-12 text-slate-500" />
+                            <p className="text-2xs text-slate-400">Stream connected (Audio only)</p>
+                          </div>
+                        )}
+
+                        {/* ── WARPED OVERLAY CANVAS ── */}
+                        <canvas 
+                          id="linked-overlay-canvas"
+                          width="1000"
+                          height="640"
+                          className="absolute top-0 left-0 pointer-events-none z-10"
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            transformOrigin: '0 0',
+                            transform: (() => {
+                              const H = getHomographyMatrix(
+                                [
+                                  { x: 0, y: 0 },
+                                  { x: 100, y: 0 },
+                                  { x: 100, y: 100 },
+                                  { x: 0, y: 100 }
+                                ],
+                                calibrationPoints
+                              );
+                              return getCssMatrix3d(H);
+                            })()
+                          }}
+                        />
+
+                        {/* ── INTERACTIVE DRAWING OVERLAY FOR MOUSE INJECTION ── */}
+                        <div 
+                          className="absolute inset-0 z-20 cursor-crosshair"
+                          style={{ pointerEvents: isCalibrating ? 'none' : 'auto' }}
+                          onMouseDown={handleOverlayMouseDown}
+                          onMouseMove={handleOverlayMouseMove}
+                          onMouseUp={handleOverlayMouseUp}
+                          onMouseLeave={handleOverlayMouseUp}
+                        />
+
+                        {/* ── INTERACTIVE CALIBRATION HANDLES OVERLAY ── */}
+                        {isCalibrating && (
+                          <div className="absolute inset-0 z-40 select-none">
+                            {calibrationPoints.map((pt, idx) => {
+                              const label = idx === 0 ? 'TL' : idx === 1 ? 'TR' : idx === 2 ? 'BR' : 'BL';
+                              return (
+                                <div
+                                  key={idx}
+                                  className="absolute w-6 h-6 -ml-3 -mt-3 rounded-full flex items-center justify-center cursor-move shadow-lg border border-white/40 active:scale-125 transition-transform"
+                                  style={{
+                                    left: `${pt.x}%`,
+                                    top: `${pt.y}%`,
+                                    background: 'radial-gradient(circle, var(--nx-primary) 0%, rgba(209,110,71,0.6) 100%)',
+                                    boxShadow: '0 0 10px var(--nx-primary)',
+                                  }}
+                                  onMouseDown={(e) => handleStartDragHandle(e, idx)}
+                                >
+                                  <span className="text-[8px] font-black text-white">{label}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
+
+                </div>
+              ) : (
+                /* ── STANDARD VIDEO GRID VIEW ── */
+                <div
+                  className={`flex-1 gap-4 overflow-y-auto ${
                   streamLayout === 'horizontal' ? 'flex flex-row'
                   : (streamLayout === 'equal' || streamLayout === 'three') ? 'grid'
                   : streamLayout === 'pip-remote' || streamLayout === 'pip-local' ? 'relative'
@@ -6790,6 +7105,7 @@ export default function App() {
                 )}
 
               </div>
+            )}
 
               <div className="stage-floating-controls" aria-label="Fullscreen call controls">
                 <button onClick={toggleAudio}
@@ -7481,7 +7797,21 @@ export default function App() {
 
                 {/* ── WHITEBOARD PANEL ── */}
                 {activeTab === 'whiteboard' && (
-                  <Whiteboard socket={socket} roomName={roomName} e2eeKey={roomE2eeKey} />
+                  <Whiteboard 
+                    socket={socket} 
+                    roomName={roomName} 
+                    e2eeKey={roomE2eeKey} 
+                    isLinkedToShareScreen={isLinkedToShareScreen}
+                    setIsLinkedToShareScreen={setIsLinkedToShareScreen}
+                    linkedStreamId={linkedStreamId}
+                    setLinkedStreamId={setLinkedStreamId}
+                    isCalibrating={isCalibrating}
+                    setIsCalibrating={setIsCalibrating}
+                    calibrationPoints={calibrationPoints}
+                    setCalibrationPoints={setCalibrationPoints}
+                    participants={participants}
+                    screenStream={screenStream}
+                  />
                 )}
 
                 {/* ── WORKSPACE PANEL ── */}

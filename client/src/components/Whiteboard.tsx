@@ -23,6 +23,16 @@ interface WhiteboardProps {
   socket: Socket | null;
   roomName: string;
   e2eeKey?: CryptoKey | null;
+  isLinkedToShareScreen?: boolean;
+  setIsLinkedToShareScreen?: (val: boolean) => void;
+  linkedStreamId?: string | null;
+  setLinkedStreamId?: (val: string | null) => void;
+  isCalibrating?: boolean;
+  setIsCalibrating?: (val: boolean) => void;
+  calibrationPoints?: Array<{x: number; y: number}>;
+  setCalibrationPoints?: (pts: Array<{x: number; y: number}>) => void;
+  participants?: any[];
+  screenStream?: MediaStream | null;
 }
 
 interface Stroke {
@@ -47,7 +57,19 @@ interface RemoteCursor {
   lastSeen: number;
 }
 
-export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProps) {
+export default function Whiteboard({ 
+  socket, 
+  roomName, 
+  e2eeKey,
+  isLinkedToShareScreen = false,
+  setIsLinkedToShareScreen,
+  linkedStreamId = null,
+  setLinkedStreamId,
+  isCalibrating = false,
+  setIsCalibrating,
+  setCalibrationPoints,
+  screenStream = null
+}: WhiteboardProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1132,8 +1154,165 @@ export default function Whiteboard({ socket, roomName, e2eeKey }: WhiteboardProp
     };
   }, [socket, e2eeKey]);
 
+  useEffect(() => {
+    const handleLocalDrawStroke = (e: CustomEvent<any>) => {
+      const { stroke } = e.detail;
+      const canvas = canvasRef.current;
+      const ctx = getCanvasContext();
+      if (!canvas || !ctx) return;
+      
+      // Draw locally
+      ctx.beginPath();
+      ctx.moveTo(stroke.lastX, stroke.lastY);
+      ctx.lineTo(stroke.x, stroke.y);
+      ctx.lineWidth = stroke.size;
+      ctx.lineCap = 'round';
+      if (stroke.isEraser) {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.stroke();
+        ctx.globalCompositeOperation = 'source-over';
+      } else {
+        ctx.strokeStyle = convertPeachToGold(stroke.color);
+        ctx.stroke();
+      }
+      
+      // Save state
+      saveState();
+      
+      // Emit to peers
+      if (socket) {
+        (async () => {
+          let finalStroke: any = stroke;
+          if (e2eeKey) {
+            try {
+              finalStroke = await encryptText(JSON.stringify(stroke), e2eeKey);
+            } catch (err) {
+              console.error("E2EE encryption failed for overlay stroke:", err);
+            }
+          }
+          socket.emit('draw', { roomName, stroke: finalStroke });
+        })();
+      }
+    };
+    
+    window.addEventListener('local-draw-stroke' as any, handleLocalDrawStroke);
+    return () => {
+      window.removeEventListener('local-draw-stroke' as any, handleLocalDrawStroke);
+    };
+  }, [socket, e2eeKey, roomName]);
+
   return (
     <div className="space-y-4 relative whiteboard-container">
+      
+      {/* ── LINK TO SHARE SCREEN CONTROL DASHBOARD ── */}
+      <div 
+        className="p-4 rounded-3xl border text-left relative overflow-hidden transition-all duration-300 shadow-xl"
+        style={{
+          background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.4) 0%, rgba(15, 23, 42, 0.6) 100%)',
+          borderColor: isLinkedToShareScreen ? 'rgba(209, 110, 71, 0.3)' : 'rgba(255, 255, 255, 0.05)',
+          boxShadow: isLinkedToShareScreen ? '0 10px 30px rgba(209, 110, 71, 0.1)' : 'none'
+        }}
+      >
+        <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-2xl flex items-center justify-center transition-all ${
+              isLinkedToShareScreen ? 'bg-[var(--nx-primary)]/10 text-[var(--nx-primary)] border border-[var(--nx-primary)]/20' : 'bg-white/5 text-slate-500'
+            }`}>
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-xs font-black text-white uppercase tracking-wider font-display flex items-center gap-2">
+                Link to Share Screen
+                {isLinkedToShareScreen && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                )}
+              </h3>
+              <p className="text-[10px] text-slate-400 mt-0.5 leading-normal">
+                Calibrate and overlay digital whiteboard sketches on any live video feed in real-time.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsLinkedToShareScreen?.(!isLinkedToShareScreen)}
+              className={`nx-btn text-2xs py-2 px-4 font-bold flex items-center gap-2 transition-all ${
+                isLinkedToShareScreen 
+                  ? 'nx-btn-primary shadow-lg shadow-[var(--nx-primary)]/20' 
+                  : 'nx-btn-ghost hover:bg-white/5 border border-white/10 text-slate-300'
+              }`}
+            >
+              <CloudLightning className="w-3.5 h-3.5" />
+              {isLinkedToShareScreen ? 'Active (Click to Unlink)' : 'Enable Linking'}
+            </button>
+          </div>
+        </div>
+
+        {/* Expanded Controls when active */}
+        {isLinkedToShareScreen && (
+          <div className="mt-4 pt-3.5 border-t border-white/5 flex flex-wrap items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex flex-col gap-1 text-left">
+                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
+                  Target Stream Source
+                </label>
+                <select
+                  value={linkedStreamId || ''}
+                  onChange={(e) => setLinkedStreamId?.(e.target.value || null)}
+                  className="nx-input text-2xs bg-slate-950/80 border border-white/10 px-2 py-1 rounded-xl text-white font-semibold font-sans w-48 focus:outline-none focus:border-[var(--nx-primary)]/50"
+                >
+                  <option value="self">Local Webcam Feed</option>
+                  {screenStream && (
+                    <option value="screen">Active Screen Share</option>
+                  )}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1 text-left">
+                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
+                  whiteboard calibration
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsCalibrating?.(!isCalibrating)}
+                    className={`text-[10px] font-bold px-3 py-1 rounded-xl border transition-all ${
+                      isCalibrating
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-300 animate-pulse'
+                        : 'border-white/10 bg-slate-950/40 text-slate-300 hover:bg-white/5'
+                    }`}
+                  >
+                    {isCalibrating ? '✓ Finish Calibration' : '⚙ Calibrate Corners'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCalibrationPoints?.([
+                        { x: 10, y: 10 },
+                        { x: 90, y: 10 },
+                        { x: 90, y: 90 },
+                        { x: 10, y: 90 }
+                      ]);
+                      showToast("Calibration reset to default.", "success");
+                    }}
+                    className="text-[10px] px-3 py-1 rounded-xl border border-white/5 text-slate-500 hover:text-slate-300 transition-all hover:bg-white/5"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-[9px] text-slate-500 font-mono flex items-center gap-1.5 bg-slate-950/40 px-3 py-1.5 rounded-xl border border-white/5">
+              <Lock className="w-3 h-3 text-indigo-400 animate-pulse" />
+              Coordinate Matrix: DLT 3x3 Homography Enabled
+            </div>
+          </div>
+        )}
+      </div>
       
       {/* Toast Alert Indicator */}
       {toastMessage && (
