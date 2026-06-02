@@ -1071,6 +1071,20 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ── LINK TO SHARE SCREEN SYNC ──────────────────────────────────────────
+  // When a user activates/deactivates "Link to Share Screen", broadcast the
+  // state to all other room members so they can mirror the linked layout.
+  socket.on('toggle_screen_link', ({ isLinked, linkedStreamId, senderName }) => {
+    if (!currentRoom) return;
+    socket.to(currentRoom).emit('screen_link_changed', {
+      isLinked: !!isLinked,
+      linkedStreamId: typeof linkedStreamId === 'string' ? linkedStreamId.slice(0, 80) : null,
+      senderName: typeof senderName === 'string' ? senderName.slice(0, 80) : 'Peer',
+      senderId: socket.id,
+    });
+    console.log(`[Signalling] Screen link toggled by <${senderName || socket.id}> in ${currentRoom}: isLinked=${isLinked}`);
+  });
+
   // ── CALL INVITES ─────────────────────────────────────────────────────────
   // Caller emits call_invite; server routes it to the target by username.
   // If target is online: deliver via socket (instant).

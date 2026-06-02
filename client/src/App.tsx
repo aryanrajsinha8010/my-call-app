@@ -396,6 +396,13 @@ export default function App() {
   const [overlayHoverPos, setOverlayHoverPos] = useState<{ x: number; y: number } | null>(null);
   const [whiteboardProjectedPointer, setWhiteboardProjectedPointer] = useState<{ x: number; y: number } | null>(null);
 
+  // ── Floating Whiteboard Panel Position & Size ──
+  const [floatPos, setFloatPos] = useState({ x: 24, y: 24 });   // from bottom-right
+  const [floatSize, setFloatSize] = useState({ width: 550, height: 480 });
+  const floatDraggingRef = useRef(false);
+  const floatResizingRef = useRef(false);
+  const floatDragStartRef = useRef({ mouseX: 0, mouseY: 0, startX: 0, startY: 0 });
+  const floatResizeStartRef = useRef({ mouseX: 0, mouseY: 0, startW: 550, startH: 480 });
 
 
   const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
@@ -2648,6 +2655,41 @@ export default function App() {
     }
   }, [isLinkedToShareScreen, screenStream, linkedStreamId]);
 
+  // 1b. Emit screen link state to peers via socket
+  useEffect(() => {
+    if (!socket || !inRoom) return;
+    socket.emit('toggle_screen_link', {
+      isLinked: isLinkedToShareScreen,
+      linkedStreamId: linkedStreamId,
+      senderName: myAlias.name,
+    });
+  }, [isLinkedToShareScreen, linkedStreamId, socket, inRoom]);
+
+  // 1c. Listen for remote peers' screen link changes
+  useEffect(() => {
+    if (!socket) return;
+    const handleScreenLinkChanged = ({ isLinked, linkedStreamId: remoteLinkedId, senderName }: {
+      isLinked: boolean; linkedStreamId: string | null; senderName: string; senderId: string;
+    }) => {
+      console.log(`[ScreenLink] Remote peer <${senderName}> ${isLinked ? 'activated' : 'deactivated'} screen link`);
+      setIsLinkedToShareScreen(isLinked);
+      if (isLinked && remoteLinkedId) {
+        // Remote peer selected a stream – for remote viewers, default to 'screen' if available, else 'self'
+        if (screenStream) {
+          setLinkedStreamId('screen');
+        } else {
+          setLinkedStreamId('self');
+        }
+      } else if (!isLinked) {
+        setLinkedStreamId(null);
+      }
+    };
+    socket.on('screen_link_changed', handleScreenLinkChanged);
+    return () => {
+      socket.off('screen_link_changed', handleScreenLinkChanged);
+    };
+  }, [socket, screenStream]);
+
   // 2. Expand sidebar to 72% width when whiteboard is linked, restore on unlink
   const lastSidebarWidthRef = useRef(320);
   useEffect(() => {
@@ -2855,6 +2897,75 @@ export default function App() {
   const handleOverlayMouseUp = () => {
     setIsOverlayDrawing(false);
   };
+
+  // ── Floating Whiteboard Drag & Resize Handlers ──
+  const handleFloatDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    floatDraggingRef.current = true;
+    floatDragStartRef.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      startX: floatPos.x,
+      startY: floatPos.y,
+    };
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
+  }, [floatPos]);
+
+  const handleFloatResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    floatResizingRef.current = true;
+    floatResizeStartRef.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      startW: floatSize.width,
+      startH: floatSize.height,
+    };
+    document.body.style.cursor = 'nwse-resize';
+    document.body.style.userSelect = 'none';
+  }, [floatSize]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (floatDraggingRef.current) {
+        const dx = e.clientX - floatDragStartRef.current.mouseX;
+        const dy = e.clientY - floatDragStartRef.current.mouseY;
+        // floatPos is measured from bottom-right, so invert deltas
+        const newX = Math.max(0, floatDragStartRef.current.startX - dx);
+        const newY = Math.max(0, floatDragStartRef.current.startY + dy);
+        // Clamp within viewport
+        const maxX = window.innerWidth - floatSize.width - 8;
+        const maxY = window.innerHeight - floatSize.height - 8;
+        setFloatPos({
+          x: Math.min(newX, maxX),
+          y: Math.min(newY, maxY),
+        });
+      }
+      if (floatResizingRef.current) {
+        const dx = e.clientX - floatResizeStartRef.current.mouseX;
+        const dy = e.clientY - floatResizeStartRef.current.mouseY;
+        const newW = Math.max(320, Math.min(window.innerWidth - 80, floatResizeStartRef.current.startW + dx));
+        const newH = Math.max(260, Math.min(window.innerHeight - 80, floatResizeStartRef.current.startH + dy));
+        setFloatSize({ width: newW, height: newH });
+      }
+    };
+    const handleMouseUp = () => {
+      if (floatDraggingRef.current || floatResizingRef.current) {
+        floatDraggingRef.current = false;
+        floatResizingRef.current = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [floatSize.width, floatSize.height]);
 
   // ── Desktop Agent Integration ──
   useEffect(() => {
@@ -6749,17 +6860,43 @@ export default function App() {
                     {/* Render Remote Peers in Ribbon */}
                     {orderedParticipants.map(peer => {
                       if (locallyHiddenPeers.includes(peer.id)) return null;
+                      const isSelected = linkedStreamId === peer.id;
                       return (
                         <div 
                           key={peer.id}
-                          className="flex-shrink-0 w-full aspect-video rounded-xl overflow-hidden border border-white/10 transition relative bg-slate-900 flex flex-col items-center justify-center p-2"
+                          onClick={() => setLinkedStreamId(peer.id)}
+                          className={`flex-shrink-0 w-full aspect-video rounded-xl overflow-hidden transition relative cursor-pointer group ${
+                            isSelected
+                              ? 'border-2 border-[var(--nx-primary)]/60 shadow-lg shadow-[var(--nx-primary)]/10'
+                              : 'border border-white/10 hover:border-[var(--nx-primary)]/30'
+                          }`}
+                          style={{
+                            background: isValidProfilePic(getPeerProfilePic(peer))
+                              ? `url(${getPeerProfilePic(peer)}) center/cover`
+                              : 'radial-gradient(circle at 50% 30%, rgba(99,102,241,0.18), rgba(6,10,24,0.96) 60%)',
+                          }}
                         >
-                          {isValidProfilePic(getPeerProfilePic(peer)) ? (
-                            <img src={getPeerProfilePic(peer)} alt={peer.name} className="w-8 h-8 rounded-full object-cover" />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-xs text-indigo-400 font-bold">{peer.avatar}</div>
+                          {/* Avatar overlay if no profile pic */}
+                          {!isValidProfilePic(getPeerProfilePic(peer)) && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="w-10 h-10 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-lg text-indigo-400 font-bold">{peer.avatar}</div>
+                            </div>
                           )}
-                          <span className="text-[8px] text-slate-400 mt-1 font-semibold truncate max-w-full">{peer.name}</span>
+                          {/* Bottom nameplate */}
+                          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-slate-950/95 to-transparent p-1.5 pt-4">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-[8px] text-white font-semibold truncate">{peer.name}</span>
+                              <div className="flex items-center gap-0.5">
+                                {peer.isMuted && <MicOff className="w-2.5 h-2.5 text-rose-400" />}
+                                {peer.isVideoOff && <VideoOff className="w-2.5 h-2.5 text-slate-400" />}
+                                {peer.isSharingScreen && <Monitor className="w-2.5 h-2.5 text-emerald-400" />}
+                              </div>
+                            </div>
+                          </div>
+                          {/* Live dot */}
+                          <div className="absolute top-1 right-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 block animate-pulse" />
+                          </div>
                         </div>
                       );
                     })}
@@ -7556,13 +7693,26 @@ export default function App() {
               {/* Floating Whiteboard in Fullscreen Mode */}
               {isFullscreen && isLinkedToShareScreen && (
                 <div 
-                  className="absolute bottom-6 right-6 w-[550px] h-[480px] bg-slate-950/90 border border-white/10 rounded-3xl p-4 shadow-2xl z-50 backdrop-blur-xl animate-in zoom-in-95 duration-200 flex flex-col text-left"
-                  style={{ boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5)' }}
+                  className="absolute bg-slate-950/90 border border-white/10 rounded-3xl shadow-2xl z-50 backdrop-blur-xl animate-in zoom-in-95 duration-200 flex flex-col text-left"
+                  style={{
+                    bottom: floatPos.y,
+                    right: floatPos.x,
+                    width: floatSize.width,
+                    height: floatSize.height,
+                    boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5)',
+                    minWidth: 320,
+                    minHeight: 260,
+                  }}
                 >
-                  <div className="flex items-center justify-between pb-3 mb-2 border-b border-white/5 flex-shrink-0">
+                  {/* Draggable Title Bar */}
+                  <div 
+                    className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/5 flex-shrink-0 cursor-grab active:cursor-grabbing select-none"
+                    onMouseDown={handleFloatDragStart}
+                  >
                     <div className="flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-[var(--nx-primary)] animate-pulse" />
                       <h4 className="text-xs font-bold text-slate-200 font-display">Floating Whiteboard</h4>
+                      <span className="text-[8px] text-slate-500 font-mono uppercase">Drag to move</span>
                     </div>
                     <button 
                       onClick={() => openFullscreen()} 
@@ -7572,7 +7722,8 @@ export default function App() {
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                  <div className="flex-1 min-h-0 overflow-y-auto">
+                  {/* Whiteboard Content */}
+                  <div className="flex-1 min-h-0 overflow-y-auto p-4 pt-2">
                     <Whiteboard 
                       socket={socket} 
                       roomName={roomName} 
@@ -7589,6 +7740,21 @@ export default function App() {
                       screenStream={screenStream}
                       whiteboardPersistRef={whiteboardPersistRef}
                     />
+                  </div>
+                  {/* Bottom-Right Resize Handle */}
+                  <div 
+                    className="absolute bottom-0 right-0 w-6 h-6 cursor-nwse-resize z-50 flex items-center justify-center opacity-40 hover:opacity-80 transition-opacity"
+                    onMouseDown={handleFloatResizeStart}
+                    title="Drag to resize"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 12 12" className="text-slate-400">
+                      <circle cx="9" cy="9" r="1.2" fill="currentColor" />
+                      <circle cx="5" cy="9" r="1.2" fill="currentColor" />
+                      <circle cx="9" cy="5" r="1.2" fill="currentColor" />
+                      <circle cx="1" cy="9" r="1.2" fill="currentColor" />
+                      <circle cx="9" cy="1" r="1.2" fill="currentColor" />
+                      <circle cx="5" cy="5" r="1.2" fill="currentColor" />
+                    </svg>
                   </div>
                 </div>
               )}
